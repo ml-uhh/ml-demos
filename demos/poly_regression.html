@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Interactive Polynomial Regression Demo</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/numeric/1.2.6/numeric.min.js"></script>
+  <style>
+    body { display: flex; flex-direction: column; align-items: center; font-family: sans-serif; margin: 20px; }
+    h1, p { text-align: center; }
+    svg { border: 1px solid #ccc; background: #fafafa; margin-bottom: 20px; }
+    .controls { display: flex; gap: 40px; }
+    .column { display: flex; flex-direction: column; gap: 10px; }
+    .row { display: flex; gap: 20px; align-items: center; }
+    label { font-size: 14px; }
+    input[type="range"] { width: 200px; }
+    #lambdaSlider { width: 200px; }
+    #coeffDisplay div, #modelSym, #lossFormula { font-family: monospace; font-size: 14px; }
+    #coeffDisplay { margin-left: 20px; margin-top: 5px; }
+    button { padding: 6px 10px; font-size: 14px; }
+    .point { fill: steelblue; cursor: pointer; }
+    .point.dragging { fill: darkorange; }
+    .fit-line { stroke: crimson; stroke-width: 2px; fill: none; }
+  </style>
+</head>
+<body>
+  <h1>Polynomial Regression Demo</h1>
+  <p>Click to add and drag data points. Adjust degree and regularization to fit.</p>
+
+  <svg id="canvas" width="600" height="400"></svg>
+
+  <div class="controls">
+    <div class="column">
+      <div class="row">
+        <label for="degreeSlider">Degree: 
+          <input type="range" id="degreeSlider" min="1" max="10" value="3">
+          <span id="degreeVal">3</span>
+        </label>
+      </div>
+      <div class="row">
+        <div id="coeffDisplay"></div>
+      </div>
+    </div>
+    <div class="column">
+      <div class="row">
+        <label><input type="checkbox" id="regCheckbox"> Enable Regularization</label>
+        <button id="clearBtn">Clear Points</button>
+      </div>
+      <div class="row">
+        <label id="lambdaLabel" for="lambdaSlider">λ: 
+          <input type="range" id="lambdaSlider" min="-8" max="2" step="0.1" value="-10">
+          <span id="lambdaVal">1.0e-10</span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const width = 600, height = 400;
+    const svg = d3.select('#canvas');
+    let data = [];
+
+    function dataToPixel(x, y) {
+      return [(x + 1) / 2 * width, (1 - (y + 1) / 2) * height];
+    }
+    function pixelToData(px, py) {
+      return [px / width * 2 - 1, 1 - py / height * 2];
+    }
+
+    const degreeSlider = document.getElementById('degreeSlider');
+    const degreeVal = document.getElementById('degreeVal');
+    const regCheckbox = document.getElementById('regCheckbox');
+    const lambdaSlider = document.getElementById('lambdaSlider');
+    const lambdaVal = document.getElementById('lambdaVal');
+    const lambdaLabel = document.getElementById('lambdaLabel');
+    const coeffDiv = document.getElementById('coeffDisplay');
+    const clearBtn = document.getElementById('clearBtn');
+
+    degreeSlider.addEventListener('input', () => { degreeVal.textContent = degreeSlider.value; update(); });
+    lambdaSlider.addEventListener('input', () => { lambdaVal.textContent = Math.pow(10, +lambdaSlider.value).toExponential(1); update(); });
+    regCheckbox.addEventListener('change', () => { lambdaLabel.style.display = regCheckbox.checked ? 'block' : 'none'; update(); });
+    clearBtn.addEventListener('click', () => { data = []; update(); });
+
+    lambdaLabel.style.display = regCheckbox.checked ? 'block' : 'none';
+    degreeVal.textContent = degreeSlider.value;
+    lambdaVal.textContent = Math.pow(10, +lambdaSlider.value).toExponential(1);
+
+    const drag = d3.drag()
+      .on('start', (event, d) => d3.select(event.sourceEvent.target).classed('dragging', true))
+      .on('drag', (event, d) => { const [x, y] = pixelToData(...d3.pointer(event, svg.node())); d.x = x; d.y = y; update(); })
+      .on('end', (event, d) => d3.select(event.sourceEvent.target).classed('dragging', false));
+
+    svg.on('click', function(event) {
+      if (event.target.tagName === 'svg' && data.length < 200) {
+        const [x, y] = pixelToData(...d3.pointer(event, this)); data.push({ x, y }); update();
+      }
+    });
+
+    function fitPolynomial(data, degree, lambda) {
+      const X = data.map(d => [1, ...Array.from({ length: degree }, (_, j) => Math.pow(d.x, j+1))]);
+      const y = data.map(d => d.y);
+      const XT = numeric.transpose(X);
+      let XTX = numeric.dot(XT, X);
+      for (let i = 1; i <= degree; i++) XTX[i][i] += lambda;
+      return numeric.solve(XTX, numeric.dot(XT, y));
+    }
+
+    function update() {
+      const degree = +degreeSlider.value;
+      const lambda = regCheckbox.checked ? Math.pow(10, +lambdaSlider.value) : 0;
+
+      const pts = svg.selectAll('circle.point').data(data);
+      const ptsEnter = pts.enter().append('circle').attr('class', 'point').attr('r', 5).call(drag);
+      ptsEnter.merge(pts).attr('cx', d => dataToPixel(d.x, d.y)[0]).attr('cy', d => dataToPixel(d.x, d.y)[1]);
+      pts.exit().remove();
+
+      svg.selectAll('path.fit-line').remove();
+
+      if ((regCheckbox.checked && data.length >= 1) || data.length >= degree + 1) {
+        const w = fitPolynomial(data, degree, lambda);
+        // Display model and loss using norms without subscripts
+        const modelSym = 'Model: Σ<sub>i</sub> w<sub>i</sub>x<sup>i</sup>';
+        const lossSym = regCheckbox.checked
+          ? 'Loss: ||Xw - y||² + λ ||w||²'
+          : 'Loss: ||Xw - y||²';
+        coeffDiv.innerHTML = `<div id="modelSym">${modelSym}</div>` +
+                             `<div id="lossFormula">${lossSym}</div><br>Coefficients<br><br>`;
+        w.forEach((c, i) => {
+          coeffDiv.innerHTML += `<div>w<sub>${i}</sub> = ${c.toFixed(3)}</div>`;
+        });
+        const curve = d3.range(-1, 1.001, 0.02).map(x => dataToPixel(x,
+          w.reduce((sum, wi, idx) => sum + wi * Math.pow(x, idx), 0)
+        ));
+        svg.append('path').attr('class', 'fit-line').attr('d', d3.line()(curve));
+      } else {
+        coeffDiv.innerHTML = '';
+      }
+    }
+
+    update();
+  </script>
+</body>
+</html>

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Least Squares Regression with D3.js</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; }
+    #chart { margin: auto; }
+    button { font-size: 16px; padding: 8px 16px; margin: 10px; cursor: pointer; }
+    circle.point { fill: black; cursor: default; }
+    circle.point.hovered { fill: orange; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>Least Squares Regression</h1>
+  <p>Click to add points. Drag to move them. Hover near a point to highlight it. Toggle to show residuals.</p>
+  <div id="chart"></div>
+  <div>
+    <button id="resetBtn">Reset</button>
+    <button id="toggleErrorBtn">Show Errors</button>
+  </div>
+
+  <!-- Load full D3 v7 UMD bundle -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script>
+    const width = 800;
+    const height = 500;
+    const margin = { top: 20, right: 20, bottom: 40, left: 50 };
+    const innerWidth = width - margin.left - margin.right;
+    const innerHeight = height - margin.top - margin.bottom;
+    const hoverThreshold = 10; // pixels
+
+    let points = [];
+    let showErrors = false;
+    let hoverIndex = null;
+
+    const svg = d3.select('#chart')
+      .append('svg')
+      .attr('width', width)
+      .attr('height', height)
+      .style('border', '1px solid #000');
+
+    const g = svg.append('g')
+      .attr('transform', `translate(${margin.left},${margin.top})`);
+
+    const xScale = d3.scaleLinear()
+      .domain([0, innerWidth])
+      .range([0, innerWidth]);
+
+    const yScale = d3.scaleLinear()
+      .domain([0, innerHeight])
+      .range([innerHeight, 0]);
+
+    g.append('g')
+      .attr('transform', `translate(0,${innerHeight})`)
+      .call(d3.axisBottom(xScale));
+
+    g.append('g')
+      .call(d3.axisLeft(yScale));
+
+    const pointGroup = g.append('g');
+    const errorGroup = g.append('g');
+    const lineGroup = g.append('g');
+
+    // Add point on click (only if clicking on background)
+    svg.on('click', function(event) {
+      if (d3.select(event.target).node() === svg.node()) {
+        const [mx, my] = d3.pointer(event);
+        const x = xScale.invert(mx - margin.left);
+        const y = yScale.invert(my - margin.top);
+        points.push({ x, y });
+        update();
+      }
+    });
+
+    // Highlight nearest point on mousemove
+    g.on('mousemove', function(event) {
+      const [mx, my] = d3.pointer(event, g.node());
+      let nearest = null;
+      let minDist = Infinity;
+      points.forEach((d, i) => {
+        const dx = xScale(d.x) - mx;
+        const dy = yScale(d.y) - my;
+        const dist = Math.hypot(dx, dy);
+        if (dist < minDist) {
+          minDist = dist;
+          nearest = i;
+        }
+      });
+      if (minDist <= hoverThreshold) {
+        hoverIndex = nearest;
+        svg.style('cursor', 'pointer');
+      } else {
+        hoverIndex = null;
+        svg.style('cursor', 'default');
+      }
+      update();
+    }).on('mouseleave', () => {
+      hoverIndex = null;
+      svg.style('cursor', 'default');
+      update();
+    });
+
+    function update() {
+      // compute regression
+      let m = 0, b = 0;
+      if (points.length >= 2) {
+        const n = points.length;
+        const sumX = d3.sum(points, d => d.x);
+        const sumY = d3.sum(points, d => d.y);
+        const meanX = sumX / n;
+        const meanY = sumY / n;
+        const sumXY = d3.sum(points, d => d.x * d.y);
+        const sumX2 = d3.sum(points, d => d.x * d.x);
+        m = (sumXY - n * meanX * meanY) / (sumX2 - n * meanX ** 2);
+        b = meanY - m * meanX;
+      }
+
+      // draw line
+      lineGroup.selectAll('line.regression').remove();
+      if (points.length >= 2) {
+        lineGroup.append('line')
+          .attr('class', 'regression')
+          .attr('x1', xScale(0))
+          .attr('y1', yScale(b))
+          .attr('x2', xScale(innerWidth))
+          .attr('y2', yScale(m * innerWidth + b))
+          .attr('stroke', 'red')
+          .attr('stroke-width', 3);
+      }
+
+      // draw errors
+      errorGroup.selectAll('line.error').remove();
+      if (showErrors && points.length >= 2) {
+        errorGroup.selectAll('line.error')
+          .data(points)
+          .enter().append('line')
+            .attr('class', 'error')
+            .attr('x1', d => xScale(d.x))
+            .attr('y1', d => yScale(d.y))
+            .attr('x2', d => xScale(d.x))
+            .attr('y2', d => yScale(m * d.x + b))
+            .attr('stroke', 'blue')
+            .attr('stroke-dasharray', '4 4');
+      }
+
+      // draw points
+      const pts = pointGroup.selectAll('circle').data(points);
+      pts.enter().append('circle')
+        .attr('class', 'point')
+        .attr('r', 6)
+        .call(d3.drag()
+          .on('drag', (event, d) => {
+            const [mx, my] = d3.pointer(event, g.node());
+            d.x = xScale.invert(mx);
+            d.y = yScale.invert(my);
+            update();
+          }))
+        .merge(pts)
+        .attr('cx', (d, i) => xScale(d.x))
+        .attr('cy', (d, i) => yScale(d.y))
+        .attr('class', (d, i) => i === hoverIndex ? 'point hovered' : 'point');
+      pts.exit().remove();
+
+      // update info
+      const info = d3.select('#info');
+      if (points.length >= 2) {
+        info.text(`y = ${m.toFixed(3)}x + ${b.toFixed(3)}`);
+      } else {
+        info.text('');
+      }
+    }
+
+    // button handlers
+    d3.select('#resetBtn').on('click', () => {
+      points = [];
+      update();
+    });
+    d3.select('#toggleErrorBtn').on('click', function() {
+      showErrors = !showErrors;
+      this.textContent = showErrors ? 'Hide Errors' : 'Show Errors';
+      update();
+    });
+
+    // Initial render
+    update();
+  </script>
+  <div id="info" style="margin-top: 15px; font-size:18px;"></div>
+</body>
+</html>

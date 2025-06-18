@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Robust Regression (L1 Loss)</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+    }
+    h1 {
+      margin-top: 20px;
+      font-size: 32px;
+    }
+    canvas {
+      border: 1px solid #000;
+      cursor: grab;
+      margin-top: 10px;
+    }
+    #controls {
+      margin-top: 15px;
+    }
+    button, label {
+      font-size: 16px;
+      padding: 10px 20px;
+      margin: 5px;
+      cursor: pointer;
+    }
+    input[type="checkbox"] {
+      transform: scale(1.5);
+      margin-right: 8px;
+    }
+    #info {
+      font-family: sans-serif;
+      margin-top: 15px;
+      font-size: 18px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Robust Regression (L1 Loss)</h1>
+  <p>Click to add points. Drag to move them. Toggle lines below.</p>
+  <canvas id="canvas" width="800" height="500"></canvas>
+  
+  <div id="legend">
+  <svg width="200" height="40">
+    <line x1="10" y1="10" x2="40" y2="10" stroke="red" stroke-width="4" />
+    <text x="50" y="14" font-size="16">L2 Regression</text>
+    <line x1="10" y1="30" x2="40" y2="30" stroke="green" stroke-width="4" />
+    <text x="50" y="34" font-size="16">L1 Regression</text>
+  </svg>
+  </div>
+  
+  <div id="controls">
+    <button id="resetBtn">Reset</button>
+    <label><input type="checkbox" id="l2Toggle" checked />Show L2</label>
+    <label><input type="checkbox" id="l1Toggle" />Show L1</label>
+  </div>
+  <div id="info"></div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const resetBtn = document.getElementById('resetBtn');
+    const l2Toggle = document.getElementById('l2Toggle');
+    const l1Toggle = document.getElementById('l1Toggle');
+    const info = document.getElementById('info');
+    const points = [];
+
+    let draggingPoint = null;
+    const radius = 7;
+
+    canvas.addEventListener('mousedown', (e) => {
+      const { offsetX, offsetY } = e;
+      draggingPoint = getPointAt(offsetX, offsetY);
+      if (!draggingPoint) {
+        points.push({ x: offsetX, y: offsetY });
+      }
+      draw();
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (draggingPoint) {
+        draggingPoint.x = e.offsetX;
+        draggingPoint.y = e.offsetY;
+        draw();
+      }
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      draggingPoint = null;
+    });
+
+    resetBtn.addEventListener('click', () => {
+      points.length = 0;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      info.textContent = '';
+      draw();
+    });
+
+    l2Toggle.addEventListener('change', draw);
+    l1Toggle.addEventListener('change', draw);
+
+    function getPointAt(x, y) {
+      return points.find(p => {
+        const dx = p.x - x;
+        const dy = p.y - y;
+        return dx * dx + dy * dy <= radius * radius;
+      });
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      for (const p of points) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = 'black';
+        ctx.fill();
+      }
+
+      let infoText = "";
+
+      if (points.length >= 2) {
+        if (l2Toggle.checked) {
+          const l2 = linearRegression(points);
+          drawLine(l2.m, l2.b, 'red');
+          infoText += `L2: y = ${l2.m.toFixed(3)} * x + ${l2.b.toFixed(3)}<br>`;
+        }
+
+        if (l1Toggle.checked) {
+          const l1 = robustRegressionIRLS(points);
+          drawLine(l1.m, l1.b, 'green');
+          infoText += `L1: y = ${l1.m.toFixed(3)} * x + ${l1.b.toFixed(3)}`;
+        }
+      }
+
+      info.innerHTML = infoText;
+    }
+
+    function drawLine(m, b, color) {
+      const x1 = 0;
+      const y1 = m * x1 + b;
+      const x2 = canvas.width;
+      const y2 = m * x2 + b;
+
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+
+    function linearRegression(data) {
+      const n = data.length;
+      const sumX = data.reduce((acc, p) => acc + p.x, 0);
+      const sumY = data.reduce((acc, p) => acc + p.y, 0);
+      const sumXY = data.reduce((acc, p) => acc + p.x * p.y, 0);
+      const sumX2 = data.reduce((acc, p) => acc + p.x * p.x, 0);
+
+      const meanX = sumX / n;
+      const meanY = sumY / n;
+
+      const numerator = sumXY - n * meanX * meanY;
+      const denominator = sumX2 - n * meanX * meanX;
+
+      const m = numerator / denominator;
+      const b = meanY - m * meanX;
+
+      return { m, b };
+    }
+
+    function robustRegressionIRLS(data, maxIter = 100, epsilon = 1e-6) {
+      let { m, b } = linearRegression(data);
+
+      for (let iter = 0; iter < maxIter; iter++) {
+        const weights = data.map(p => {
+          const residual = p.y - (m * p.x + b);
+          return 1 / (Math.abs(residual) + 1e-8);
+        });
+
+        let sumW = 0, sumWX = 0, sumWY = 0, sumWXX = 0, sumWXY = 0;
+
+        for (let i = 0; i < data.length; i++) {
+          const w = weights[i];
+          const x = data[i].x;
+          const y = data[i].y;
+
+          sumW += w;
+          sumWX += w * x;
+          sumWY += w * y;
+          sumWXX += w * x * x;
+          sumWXY += w * x * y;
+        }
+
+        const denom = sumW * sumWXX - sumWX * sumWX;
+        if (Math.abs(denom) < 1e-12) break;
+
+        const mNew = (sumW * sumWXY - sumWX * sumWY) / denom;
+        const bNew = (sumWY * sumWXX - sumWX * sumWXY) / denom;
+
+        if (Math.abs(mNew - m) < epsilon && Math.abs(bNew - b) < epsilon) break;
+
+        m = mNew;
+        b = bNew;
+      }
+
+      return { m, b };
+    }
+
+    draw();
+  </script>
+</body>
+</html>

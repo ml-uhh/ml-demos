@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interactive PCA Demo</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/numeric/1.2.6/numeric.min.js"></script>
+  <style>
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      font-family: sans-serif;
+      margin: 20px;
+    }
+    h1, p {
+      text-align: center;
+    }
+    svg {
+      border: 1px solid #ccc;
+      background: #fafafa;
+      margin-top: 10px;
+      margin-bottom: 20px;
+    }
+    .controls {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;  /* increased space between control rows */
+      margin-bottom: 20px;
+    }
+    .toggle-controls, .action-controls {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+    label {
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button, input[type="number"] {
+      padding: 6px 10px;
+      font-size: 14px;
+    }
+    .point { fill: steelblue; cursor: pointer; }
+    .point.dragging { fill: darkorange; }
+    .proj-point { fill: crimson; }
+    .pc1-line { stroke: red; stroke-width: 2px; }
+    .pc2-line { stroke: blue; stroke-width: 2px; }
+    .proj-line { stroke: gray; stroke-dasharray: 4 2; }
+  </style>
+</head>
+<body>
+  <h1>PCA Demonstration</h1>
+  <p>Click to add points or create random points. Drag points to move them.</p>
+  <svg id="canvas" width="600" height="400"></svg>
+  <div class="controls">
+    <div class="toggle-controls">
+      <label><input type="checkbox" id="showPC1" checked> Show axis 1</label>
+      <label><input type="checkbox" id="showPC2"> Show axis 2</label>
+      <label><input type="checkbox" id="showProj" checked> Show Projections</label>
+    </div>
+    <div class="action-controls">
+      <input type="number" id="numPoints" value="50" min="1" max="200" style="width: 60px;">
+      <button id="generateData">Generate Random Data</button>
+      <button id="clearData">Clear Points</button>
+    </div>
+  </div>
+
+  <script>
+    const width = 600, height = 400;
+    const svg = d3.select('#canvas');
+    let points = [];
+
+    function gaussianRandom() {
+      let u = 0, v = 0;
+      while (u === 0) u = Math.random();
+      while (v === 0) v = Math.random();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    }
+
+    document.getElementById('generateData').addEventListener('click', () => {
+      let n = +document.getElementById('numPoints').value;
+      n = Math.min(n, 200);
+      points = [];
+      const baseSx = width / 8;
+      const baseSy = height / 8;
+      const sx = baseSx * (0.5 + Math.random());
+      const sy = baseSy * (0.5 + Math.random());
+      let rho;
+      if (Math.random() < 0.5) rho = -0.8 + Math.random() * 0.5;
+      else rho = 0.3 + Math.random() * 0.5;
+      const a = sx;
+      const b = rho * sy;
+      const c = Math.sqrt(Math.max(0, sy * sy - b * b));
+      for (let i = 0; i < n; i++) {
+        const z1 = gaussianRandom();
+        const z2 = gaussianRandom();
+        const x = width / 2 + a * z1;
+        const y = height / 2 + b * z1 + c * z2;
+        points.push({ x, y });
+      }
+      update();
+    });
+
+    document.getElementById('clearData').addEventListener('click', () => {
+      points = [];
+      update();
+    });
+
+    ['showPC1', 'showPC2', 'showProj'].forEach(id => {
+      document.getElementById(id).addEventListener('change', update);
+    });
+
+    svg.on('click', event => {
+      const [x, y] = d3.pointer(event);
+      if (points.length < 200) points.push({ x, y });
+      update();
+    });
+
+    const drag = d3.drag()
+      .on('start', (event, d) => d3.select(event.sourceEvent.target).classed('dragging', true))
+      .on('drag', (event, d) => { d.x = event.x; d.y = event.y; update(); })
+      .on('end', (event, d) => d3.select(event.sourceEvent.target).classed('dragging', false));
+
+    function update() {
+      const showPC1 = document.getElementById('showPC1').checked;
+      const showPC2 = document.getElementById('showPC2').checked;
+      const showProj = document.getElementById('showProj').checked;
+
+      const pts = svg.selectAll('circle.point').data(points);
+      pts.enter().append('circle')
+        .attr('class', 'point')
+        .attr('r', 5)
+        .call(drag)
+        .merge(pts)
+        .attr('cx', d => d.x)
+        .attr('cy', d => d.y);
+      pts.exit().remove();
+
+      svg.selectAll('line.pc1-line, line.pc2-line, line.proj-line, circle.proj-point').remove();
+
+      if (points.length > 1) {
+        const dataMatrix = points.map(d => [d.x, d.y]);
+        const mean = [
+          d3.mean(dataMatrix, d => d[0]),
+          d3.mean(dataMatrix, d => d[1])
+        ];
+        const centered = dataMatrix.map(d => [d[0] - mean[0], d[1] - mean[1]]);
+        const { V, S } = numeric.svd(centered);
+        const pc1 = [V[0][0], V[1][0]];
+        const pc2 = [V[0][1], V[1][1]];
+        const L = Math.max(width, height) / 2;
+        const scale1 = L;
+        const scale2 = L * (S[1] / S[0]);
+
+        if (showPC1) {
+          const x1a = mean[0] - pc1[0] * scale1;
+          const y1a = mean[1] - pc1[1] * scale1;
+          const x1b = mean[0] + pc1[0] * scale1;
+          const y1b = mean[1] + pc1[1] * scale1;
+          svg.append('line')
+            .attr('class', 'pc1-line')
+            .attr('x1', x1a).attr('y1', y1a)
+            .attr('x2', x1b).attr('y2', y1b);
+        }
+
+        if (showPC2) {
+          const x2a = mean[0] - pc2[0] * scale2;
+          const y2a = mean[1] - pc2[1] * scale2;
+          const x2b = mean[0] + pc2[0] * scale2;
+          const y2b = mean[1] + pc2[1] * scale2;
+          svg.append('line')
+            .attr('class', 'pc2-line')
+            .attr('x1', x2a).attr('y1', y2a)
+            .attr('x2', x2b).attr('y2', y2b);
+        }
+
+        if (showProj && showPC1) {
+          centered.forEach((c, i) => {
+            const t = numeric.dot(c, pc1);
+            const px = mean[0] + t * pc1[0];
+            const py = mean[1] + t * pc1[1];
+            const pt = points[i];
+            svg.append('line')
+              .attr('class', 'proj-line')
+              .attr('x1', pt.x).attr('y1', pt.y)
+              .attr('x2', px).attr('y2', py);
+            svg.append('circle')
+              .attr('class', 'proj-point')
+              .attr('r', 4)
+              .attr('cx', px)
+              .attr('cy', py);
+          });
+        }
+      }
+    }
+
+    update();
+  </script>
+</body>
+</html>

@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>K-Means Clustering Visualizer</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+      background: #f9f9f9;
+      margin: 0;
+      padding: 20px;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      display: block;
+      margin: 20px auto;
+      cursor: crosshair;
+    }
+    #controls, #start-screen {
+      margin-top: 20px;
+    }
+    button {
+      font-size: 16px;
+      padding: 10px 20px;
+      margin: 10px;
+    }
+    #instructions {
+      margin-top: 10px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h2>K-Means Clustering</h2>
+
+  <!-- Slide 1: Choose distribution -->
+  <div id="start-screen">
+    <p>Select a point distribution:</p>
+    <button onclick="start('uniform')">Uniform</button>
+    <button onclick="start('gaussian')">Gaussian Blobs</button>
+    <button onclick="start('moons')">Two Moons</button>
+    <button onclick="start('smiley')">Smiley Face</button>
+  </div>
+
+  <!-- Slide 2: Visualization -->
+  <canvas id="canvas" width="600" height="400" style="display:none;"></canvas>
+
+  <div id="controls" style="display:none;">
+    <button onclick="goBack()">Back to Start</button>
+    <button onclick="reset()">Reset</button>
+    <button onclick="nextStep()" id="nextBtn" disabled>Next Step</button>
+    <div id="instructions">Click on the canvas to select up to 5 centroids.</div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const WIDTH = canvas.width;
+    const HEIGHT = canvas.height;
+    const K = 5;
+    const NUM_POINTS = 150;
+
+    let points = [];
+    let centroids = [];
+    let selectedDistribution = "uniform";
+    let stepState = 1; // Start with Compute Centroids
+    let centroidSelectionActive = true;
+
+    const strokeColors = ["#d62728", "#2ca02c", "#1f77b4", "#ff7f0e", "#9467bd"];
+    const bgColors = [
+      [255, 200, 200],
+      [200, 255, 200],
+      [200, 200, 255],
+      [255, 230, 180],
+      [230, 200, 255]
+    ];
+
+    canvas.addEventListener("click", function(e) {
+      if (!centroidSelectionActive || centroids.length >= K) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      centroids.push({ x, y });
+      assignClusters();
+      draw();
+      if (centroids.length >= 1) {
+        const nextBtn = document.getElementById("nextBtn");
+        nextBtn.disabled = false;
+        nextBtn.textContent = "Compute Centroids";
+        stepState = 1;
+      }
+      if (centroids.length === K) {
+        centroidSelectionActive = false;
+      }
+    });
+
+    function start(distribution) {
+      selectedDistribution = distribution;
+      document.getElementById("start-screen").style.display = "none";
+      canvas.style.display = "block";
+      document.getElementById("controls").style.display = "block";
+      reset();
+    }
+
+    function goBack() {
+      document.getElementById("start-screen").style.display = "block";
+      canvas.style.display = "none";
+      document.getElementById("controls").style.display = "none";
+    }
+
+    function reset() {
+      stepState = 1;
+      centroids = [];
+      points = generatePoints(selectedDistribution);
+      centroidSelectionActive = true;
+      const nextBtn = document.getElementById("nextBtn");
+      nextBtn.disabled = true;
+      nextBtn.textContent = "Next Step";
+      ctx.clearRect(0, 0, WIDTH, HEIGHT);
+      draw();
+    }
+
+    function generatePoints(type) {
+      const pts = [];
+      if (type === "uniform") {
+        for (let i = 0; i < NUM_POINTS; i++) {
+          pts.push({ x: Math.random() * WIDTH, y: Math.random() * HEIGHT, cluster: null });
+        }
+      } else if (type === "gaussian") {
+        const centers = [
+          { x: WIDTH * 0.3, y: HEIGHT * 0.7 },
+          { x: WIDTH * 0.7, y: HEIGHT * 0.7 },
+          { x: WIDTH * 0.5, y: HEIGHT * 0.3 }
+        ];
+        for (let i = 0; i < NUM_POINTS; i++) {
+          const c = centers[i % centers.length];
+          pts.push({
+            x: randn_bm() * 25 + c.x,
+            y: randn_bm() * 25 + c.y,
+            cluster: null
+          });
+        }
+      } else if (type === "moons") {
+        for (let i = 0; i < NUM_POINTS / 2; i++) {
+          const t = Math.random() * Math.PI;
+          pts.push({
+            x: 200 + 150 * Math.cos(t) + Math.random() * 10,
+            y: 170 + 100 * Math.sin(t) + Math.random() * 10,
+            cluster: null
+          });
+        }
+        for (let i = 0; i < NUM_POINTS / 2; i++) {
+          const t = Math.random() * Math.PI;
+          pts.push({
+            x: 350 + 150 * Math.cos(t) + Math.random() * 10,
+            y: 190 - 100 * Math.sin(t) + Math.random() * 10,
+            cluster: null
+          });
+        }
+      } else if (type === "smiley") {
+        const centerX = WIDTH / 2;
+        const centerY = HEIGHT / 2;
+        const radius = 120;
+        for (let i = 0; i < 50; i++) {
+          const angle = Math.random() * 2 * Math.PI;
+          const r = radius + Math.random() * 3;
+          pts.push({ x: centerX + r * Math.cos(angle), y: centerY + r * Math.sin(angle), cluster: null });
+        }
+        for (let i = 0; i < 30; i++) {
+          const angle = Math.random() * 2 * Math.PI;
+          const r = 8 + Math.random() * 2;
+          pts.push({ x: centerX - 40 + r * Math.cos(angle), y: centerY - 40 + r * Math.sin(angle), cluster: null });
+        }
+        for (let i = 0; i < 30; i++) {
+          const angle = Math.random() * 2 * Math.PI;
+          const r = 8 + Math.random() * 2;
+          pts.push({ x: centerX + 40 + r * Math.cos(angle), y: centerY - 40 + r * Math.sin(angle), cluster: null });
+        }
+        for (let i = 0; i < 100; i++) {
+          const t = Math.random() * Math.PI;
+          const noise = Math.random() * 3;
+          pts.push({ x: centerX + (radius - 40) * Math.cos(t), y: centerY + (radius - 40) * Math.sin(t) + noise, cluster: null });
+        }
+      }
+      return pts;
+    }
+
+    function randn_bm() {
+      let u = 0, v = 0;
+      while (u === 0) u = Math.random();
+      while (v === 0) v = Math.random();
+      return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+    }
+
+    function assignClusters() {
+      for (let point of points) {
+        let minDist = Infinity;
+        let bestCluster = 0;
+        for (let i = 0; i < centroids.length; i++) {
+          const dx = point.x - centroids[i].x;
+          const dy = point.y - centroids[i].y;
+          const dist = dx * dx + dy * dy;
+          if (dist < minDist) {
+            minDist = dist;
+            bestCluster = i;
+          }
+        }
+        point.cluster = bestCluster;
+      }
+    }
+
+    function updateCentroids() {
+      const targetCentroids = [];
+      let sums = Array.from({ length: centroids.length }, () => ({ x: 0, y: 0, count: 0 }));
+      for (let point of points) {
+        const c = point.cluster;
+        sums[c].x += point.x;
+        sums[c].y += point.y;
+        sums[c].count += 1;
+      }
+      for (let i = 0; i < centroids.length; i++) {
+        if (sums[i].count > 0) {
+          targetCentroids.push({
+            x: sums[i].x / sums[i].count,
+            y: sums[i].y / sums[i].count
+          });
+        } else {
+          targetCentroids.push({ ...centroids[i] });
+        }
+      }
+
+      const startTime = performance.now();
+      const duration = 300;
+      const from = centroids.map(c => ({ ...c }));
+      const to = targetCentroids;
+
+      function animate(now) {
+        const t = Math.min((now - startTime) / duration, 1);
+        for (let i = 0; i < centroids.length; i++) {
+          centroids[i].x = from[i].x + (to[i].x - from[i].x) * t;
+          centroids[i].y = from[i].y + (to[i].y - from[i].y) * t;
+        }
+        draw();
+        if (t < 1) {
+          requestAnimationFrame(animate);
+        }
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    function drawBoundaries() {
+      const imageData = ctx.createImageData(WIDTH, HEIGHT);
+      for (let y = 0; y < HEIGHT; y++) {
+        for (let x = 0; x < WIDTH; x++) {
+          let minDist = Infinity;
+          let cluster = 0;
+          for (let i = 0; i < centroids.length; i++) {
+            const dx = x - centroids[i].x;
+            const dy = y - centroids[i].y;
+            const dist = dx * dx + dy * dy;
+            if (dist < minDist) {
+              minDist = dist;
+              cluster = i;
+            }
+          }
+          const index = (y * WIDTH + x) * 4;
+          const [r, g, b] = bgColors[cluster % bgColors.length];
+          imageData.data[index + 0] = r;
+          imageData.data[index + 1] = g;
+          imageData.data[index + 2] = b;
+          imageData.data[index + 3] = 80;
+        }
+      }
+      ctx.putImageData(imageData, 0, 0);
+    }
+
+    function drawPointsAndCentroids() {
+      for (let point of points) {
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 4, 0, 2 * Math.PI);
+        ctx.fillStyle = point.cluster === null || point.cluster === undefined ? "black" : strokeColors[point.cluster % strokeColors.length];
+        ctx.fill();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "black";
+        ctx.stroke();
+      }
+
+      for (let i = 0; i < centroids.length; i++) {
+        ctx.beginPath();
+        ctx.arc(centroids[i].x, centroids[i].y, 10, 0, 2 * Math.PI);
+        ctx.fillStyle = "white";
+        ctx.fill();
+        ctx.strokeStyle = strokeColors[i % strokeColors.length];
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+    }
+
+    function draw() {
+      if (centroids.length > 0) drawBoundaries();
+      drawPointsAndCentroids();
+    }
+
+    function nextStep() {
+      const nextBtn = document.getElementById("nextBtn");
+      if (stepState === 0) {
+        assignClusters();
+        nextBtn.textContent = "Compute Centroids";
+      } else {
+        updateCentroids();
+        nextBtn.textContent = "Assign Clusters";
+      }
+      stepState = 1 - stepState;
+      draw();
+    }
+  </script>
+</body>
+</html>
