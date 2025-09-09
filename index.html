@@ -5,23 +5,45 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Machine Learning Demos</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 2rem; line-height: 1.6; }
-    h1 { text-align: center; }
-    ul { list-style: none; padding: 0; max-width: 600px; margin: 0 auto; }
-    li { margin: 0.5rem 0; }
-    a { text-decoration: none; color: #1a0dab; }
-    a:hover { text-decoration: underline; }
-    footer { text-align: center; margin-top: 2rem; font-size: 0.9rem; color: #666; }
+    body {
+      font-family: Arial, sans-serif;
+      margin: 2rem;
+      line-height: 1.6;
+    }
+    h1 {
+      text-align: center;
+    }
+    .demo-list {
+      /* Shift the demo list to the right */
+      margin-left: 200px;
+    }
+    ul {
+      list-style: none;
+      padding: 0;
+      max-width: 600px;
+    }
+    li {
+      margin: 0.5rem 0;
+    }
+    a {
+      text-decoration: none;
+      color: #1a0dab;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
   <h1>Interactive Machine Learning Demos</h1>
-  <ul>
-    <li><a href="demos/least_squares.html">Least Squares Regression</a></li>
-    <li><a href="demos/poly_regression.html">Polynomial Regression</a></li>
-    <li><a href="demos/robust_regression.html">Robust (L1-Loss) Regression</a></li>
-    <li><a href="demos/kmeans.html">K-Means Clustering</a></li>
-    <li><a href="demos/pca.html">PCA</a></li>
-  </ul>
+  <div class="demo-list">
+    <ul>
+      <li><a href="demos/least_squares.html">Least Squares Regression</a></li>
+      <li><a href="demos/poly_regression.html">Polynomial Regression</a></li>
+      <li><a href="demos/robust_regression.html">Robust (L1-Loss) Regression</a></li>
+      <li><a href="demos/kmeans.html">K-Means Clustering</a></li>
+      <li><a href="demos/pca.html">PCA Visualization</a></li>
+    </ul>
+  </div>
 </body>
 </html>
