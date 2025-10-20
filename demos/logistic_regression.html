@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Logistic Regression — Backtracking Line Search</title>
+<style>
+  :root { --bg:#0b1020; --fg:#e8ecf1; --muted:#a9b3c1; --accent:#6ecbff; --accent2:#ff7aa2; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+  header { padding:12px 16px; border-bottom:1px solid #1a2238; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  header h1 { font-size:16px; margin:0 12px 0 0; color:var(--fg); font-weight:600; }
+  .controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  .controls > * { background:#121a2e; border:1px solid #2b3656; color:var(--fg); padding:6px 8px; border-radius:10px; }
+  .controls input[type="number"], .controls select { padding:6px; background:#0f1628; border:1px solid #2b3656; color:var(--fg); border-radius:8px; width:86px; }
+  .controls label { display:flex; gap:6px; align-items:center; color:var(--muted); }
+  .btn { cursor:pointer; user-select:none; transition:transform .03s ease; }
+  .btn:hover { border-color:#3a4a77; }
+  .btn:active { transform:translateY(1px); }
+  #wrap { display:grid; grid-template-columns: 1fr 320px; gap:0; min-height:calc(100vh - 56px); }
+  #left { position:relative; background:#0b1226; }
+  #canvas { width:100%; height:100%; display:block; background:linear-gradient(180deg,#0b1226,#0b0f1e); }
+  #right { border-left:1px solid #1a2238; display:flex; flex-direction:column; }
+  .panel { padding:12px 14px; border-bottom:1px solid #1a2238; }
+  .panel h2 { margin:0 0 8px 0; font-size:14px; color:var(--muted); font-weight:600; }
+  .legend { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:2px 8px; background:#0f1628; border:1px solid #2b3656; border-radius:999px; color:var(--muted); }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .dot.c0 { background:#7dd3fc; box-shadow:0 0 0 2px #114d69 inset; }
+  .dot.c1 { background:#fda4af; box-shadow:0 0 0 2px #6a1b2b inset; }
+  .stat { color:var(--muted); }
+  #miniLoss { width:100%; height:120px; background:#0f1628; border:1px solid #2b3656; border-radius:10px; }
+  .hint { color:#93a1bd; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Logistic Regression (2D) — Backtracking Line Search</h1>
+  <div class="controls">
+    <label>Class:
+      <select id="classSel">
+        <option value="1">+ (pink)</option>
+        <option value="0">− (blue)</option>
+      </select>
+    </label>
+    <button class="btn" id="toggleClass">Toggle (C)</button>
+    <button class="btn" id="undo">Undo</button>
+    <button class="btn" id="clear">Clear</button>
+    <label>λ <input id="lambda" type="number" value="0.001" step="0.001" min="0" max="10"></label>
+    <label>Steps <input id="steps" type="number" value="200" step="50" min="1" max="100000"></label>
+    <label>Armijo c <input id="armijoC" type="number" value="0.0001" step="0.0001" min="0.00001" max="0.5"></label>
+    <label>β shrink <input id="beta" type="number" value="0.5" step="0.05" min="0.05" max="0.95"></label>
+    <label><input id="stdz" type="checkbox" checked> Standardize</label>
+    <label><input id="heatmap" type="checkbox" checked> Heatmap</label>
+    <button class="btn" id="train">Train</button>
+  </div>
+</header>
+
+<div id="wrap">
+  <div id="left">
+    <canvas id="canvas"></canvas>
+  </div>
+  <div id="right">
+    <div class="panel">
+      <h2>How to use</h2>
+      <div class="hint">
+        Click to add points of the selected class. Press <b>C</b> to toggle class, <b>T</b> to train 200 steps, <b>R</b> to reset, <b>U</b> to undo.
+        Optimization uses full-batch gradient descent with Armijo backtracking (no fixed learning rate).
+      </div>
+      <div class="legend" style="margin-top:8px;">
+        <span class="chip"><span class="dot c0"></span> class 0</span>
+        <span class="chip"><span class="dot c1"></span> class 1</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Model</h2>
+      <div class="stat" id="wstat">w = [0, 0], b = 0</div>
+      <div class="stat" id="perf">Loss: — , Acc: —</div>
+      <div class="stat" id="lsinfo">Last step size: — (backtracks: —)</div>
+    </div>
+    <div class="panel">
+      <h2>Loss (last 200 steps)</h2>
+      <canvas id="miniLoss"></canvas>
+    </div>
+    <div class="panel">
+      <h2>Notes</h2>
+      <div class="hint">
+        • Standardization rescales points to zero mean / unit variance before fitting.<br>
+        • λ is L2 regularization on w (not on b).<br>
+        • Armijo parameters: c≈1e-4, β≈0.5 are standard; each step starts with t=1 and shrinks by β until sufficient decrease holds.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  // --- Utility ---
+  const sigmoid = z => 1 / (1 + Math.exp(-z));
+  function meanStd(arr) {
+    const n = arr.length; if (!n) return {mean:0, std:1};
+    const m = arr.reduce((a,b)=>a+b,0)/n;
+    let v = 0; for (const x of arr) v += (x-m)*(x-m);
+    const std = Math.sqrt(v/Math.max(1,n-1)) || 1;
+    return {mean:m, std};
+  }
+
+  // --- Data & parameters ---
+  const data = []; // {x:[ux,uy] in [-1,1]^2, y:0/1}
+  let w = [0,0], b = 0;
+  let lossHistory = [];
+  let lastStepSize = null, lastBacktracks = null;
+
+  // --- DOM ---
+  const canvas = document.getElementById('canvas');
+  const classSel = document.getElementById('classSel');
+  const toggleClassBtn = document.getElementById('toggleClass');
+  const undoBtn = document.getElementById('undo');
+  const clearBtn = document.getElementById('clear');
+  const trainBtn = document.getElementById('train');
+  const lamInp = document.getElementById('lambda');
+  const stepsInp = document.getElementById('steps');
+  const wstat = document.getElementById('wstat');
+  const perf = document.getElementById('perf');
+  const heatmapChk = document.getElementById('heatmap');
+  const stdzChk = document.getElementById('stdz');
+  const armijoCInp = document.getElementById('armijoC');
+  const betaInp = document.getElementById('beta');
+  const miniLoss = document.getElementById('miniLoss');
+  const lsinfo = document.getElementById('lsinfo');
+
+  const ctx = canvas.getContext('2d');
+  const lctx = miniLoss.getContext('2d');
+
+  // Resize canvases
+  function fitCanvas() {
+    const r = document.getElementById('left').getBoundingClientRect();
+    canvas.width = Math.max(300, Math.floor(r.width));
+    canvas.height = Math.max(300, Math.floor(window.innerHeight - document.querySelector('header').offsetHeight));
+  }
+  function fitLossCanvas() {
+    miniLoss.width = miniLoss.clientWidth;
+    miniLoss.height = miniLoss.clientHeight;
+  }
+  window.addEventListener('resize', () => { fitCanvas(); draw(); fitLossCanvas(); drawLoss(); });
+  fitCanvas(); fitLossCanvas();
+
+  // Coordinate transforms
+  function toUnit(p) {
+    const x = p[0] / canvas.width;
+    const y = 1 - (p[1] / canvas.height);
+    return [x*2-1, y*2-1];
+  }
+  function fromUnit(u) {
+    const x = (u[0]*0.5+0.5)*canvas.width;
+    const y = (1 - (u[1]*0.5+0.5))*canvas.height;
+    return [x,y];
+  }
+
+  // Interactions
+  canvas.addEventListener('click', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const u = toUnit([px,py]);
+    data.push({x: u, y: parseInt(classSel.value)});
+    draw();
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.key==='c' || e.key==='C') toggleClass();
+    if (e.key==='t' || e.key==='T') train(200);
+    if (e.key==='r' || e.key==='R') clearAll();
+    if (e.key==='u' || e.key==='U') undo();
+  });
+  toggleClassBtn.onclick = toggleClass;
+  function toggleClass(){ classSel.value = classSel.value === '1' ? '0' : '1'; }
+  undoBtn.onclick = undo;
+  function undo(){ data.pop(); draw(); }
+  clearBtn.onclick = clearAll;
+  function clearAll(){
+    data.length = 0; w=[0,0]; b=0; lossHistory.length=0; lastStepSize=null; lastBacktracks=null;
+    draw(); drawLoss(); updateStats();
+  }
+  trainBtn.onclick = ()=> train(parseInt(stepsInp.value));
+
+  // Standardization
+  let stats = {mx:0,my:0,sx:1,sy:1};
+  function computeStats(){
+    if (!stdzChk.checked || data.length===0) { stats={mx:0,my:0,sx:1,sy:1}; return; }
+    const xs = data.map(d=>d.x[0]); const ys = data.map(d=>d.x[1]);
+    const {mean:mx,std:sx} = meanStd(xs);
+    const {mean:my,std:sy} = meanStd(ys);
+    stats = {mx, my, sx: sx||1, sy: sy||1};
+  }
+  function zScore(u){ return stdzChk.checked ? [(u[0]-stats.mx)/stats.sx, (u[1]-stats.my)/stats.sy] : u; }
+
+  // Objective, gradient, and evaluation
+  function objectiveAndGrad(w0, w1, b0, lambda){
+    computeStats();
+    let dw0=0, dw1=0, db=0, loss=0, correct=0;
+    const n = data.length || 1;
+    for (const d of data){
+      const z = zScore(d.x);
+      const zlin = w0*z[0] + w1*z[1] + b0;
+      const p = sigmoid(zlin);
+      const y = d.y;
+      loss += -(y*Math.log(p+1e-12) + (1-y)*Math.log(1-p+1e-12));
+      if ((p>=0.5 ? 1:0) === y) correct++;
+      const g = (p - y); // d/dz
+      dw0 += g * z[0];
+      dw1 += g * z[1];
+      db  += g;
+    }
+    loss = loss/n + 0.5*lambda*(w0*w0 + w1*w1); // L2 on w only
+    dw0 = dw0/n + lambda*w0;
+    dw1 = dw1/n + lambda*w1;
+    db  = db/n;
+    return {loss, grad:[dw0,dw1,db], acc: correct/(data.length||1)};
+  }
+
+  // Armijo backtracking line search (full batch)
+  function backtrackingStep(lambda, c=1e-4, beta=0.5){
+    if (data.length===0) return {loss:0, acc:1, t:0, backtracks:0};
+    // Current loss & gradient
+    const {loss: f0, grad, acc} = objectiveAndGrad(w[0], w[1], b, lambda);
+    const [g0, g1, gb] = grad;
+    const gnorm2 = g0*g0 + g1*g1 + gb*gb;
+    if (gnorm2 === 0) return {loss:f0, acc, t:0, backtracks:0};
+
+    let t = 1.0;
+    let backtracks = 0;
+    const maxBT = 30;
+
+    // Armijo condition: f(w - t*g) <= f0 - c*t*||g||^2
+    while (true){
+      const w0t = w[0] - t*g0;
+      const w1t = w[1] - t*g1;
+      const bt  = b    - t*gb;
+      const {loss: ft} = objectiveAndGrad(w0t, w1t, bt, lambda);
+      if (ft <= f0 - c*t*gnorm2 || backtracks >= maxBT) {
+        // accept
+        w[0] = w0t; w[1] = w1t; b = bt;
+        return {loss: ft, acc, t, backtracks};
+      }
+      t *= beta; backtracks++;
+      if (t < 1e-12) { // safeguard
+        w[0] = w0t; w[1] = w1t; b = bt;
+        return {loss: ft, acc, t, backtracks};
+      }
+    }
+  }
+
+  async function train(steps){
+    const lambda = parseFloat(lamInp.value);
+    const c = parseFloat(armijoCInp.value);
+    const beta = parseFloat(betaInp.value);
+    if (!isFinite(steps) || steps<=0) steps = 200;
+
+    const chunk = 5;
+    for (let i=0;i<steps;i++){
+      const {loss, acc, t, backtracks} = backtrackingStep(lambda, c, beta);
+      lastStepSize = t; lastBacktracks = backtracks;
+      lossHistory.push(loss);
+      if (i%chunk===0 || i===steps-1){
+        draw(); drawLoss(); updateStats(loss, acc);
+        await new Promise(r=>requestAnimationFrame(r));
+      }
+    }
+  }
+
+  function updateStats(lastLoss=null, lastAcc=null){
+    wstat.textContent = `w = [${w[0].toFixed(3)}, ${w[1].toFixed(3)}], b = ${b.toFixed(3)}`;
+    if (lastLoss===null || lastAcc===null){
+      const {loss, acc} = objectiveAndGrad(w[0], w[1], b, parseFloat(lamInp.value));
+      perf.textContent = `Loss: ${loss.toFixed(4)}, Acc: ${(acc*100).toFixed(1)}%`;
+    } else {
+      perf.textContent = `Loss: ${lastLoss.toFixed(4)}, Acc: ${(lastAcc*100).toFixed(1)}%`;
+    }
+    lsinfo.textContent = `Last step size: ${lastStepSize===null?'—':lastStepSize.toExponential(2)} (backtracks: ${lastBacktracks===null?'—':lastBacktracks})`;
+  }
+
+  // Drawing
+  function draw(){
+    if (heatmapChk.checked){ drawHeatmap(); }
+    else { ctx.fillStyle = '#0b0f1e'; ctx.fillRect(0,0,canvas.width,canvas.height); }
+    drawBoundary();
+    for (const d of data){
+      const p = fromUnit(d.x);
+      ctx.beginPath();
+      ctx.arc(p[0], p[1], 5.5, 0, Math.PI*2);
+      if (d.y===1){ ctx.fillStyle = '#fda4af'; ctx.strokeStyle = '#6a1b2b'; }
+      else { ctx.fillStyle = '#7dd3fc'; ctx.strokeStyle = '#114d69'; }
+      ctx.lineWidth = 2; ctx.fill(); ctx.stroke();
+    }
+  }
+  function drawHeatmap(){
+    const img = ctx.createImageData(canvas.width, canvas.height);
+    const d = img.data;
+    computeStats();
+    for (let y=0;y<canvas.height;y++){
+      for (let x=0;x<canvas.width;x++){
+        const u = toUnit([x,y]);
+        const z = zScore(u);
+        const p = sigmoid(w[0]*z[0] + w[1]*z[1] + b);
+        const i = (y*canvas.width + x)*4;
+        const c0 = [125, 211, 252], c1 = [253, 164, 175];
+        const r = Math.round(c0[0]*(1-p) + c1[0]*p);
+        const g = Math.round(c0[1]*(1-p) + c1[1]*p);
+        const bC= Math.round(c0[2]*(1-p) + c1[2]*p);
+        d[i+0] = r*0.6; d[i+1] = g*0.6; d[i+2] = bC*0.6; d[i+3] = 255;
+      }
+    }
+    ctx.putImageData(img,0,0);
+  }
+  function drawBoundary(){
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    const pts = [];
+    for (let i=0;i<2;i++){
+      const ux = (i===0? -1 : 1);
+      const zx = stdzChk.checked ? (ux - stats.mx)/stats.sx : ux;
+      if (Math.abs(w[1]) > 1e-8){
+        const zy = -(w[0]*zx + b)/w[1];
+        const uy = stdzChk.checked ? zy*stats.sy + stats.my : zy;
+        if (isFinite(uy)) pts.push([ux, uy]);
+      }
+    }
+    if (pts.length<2){
+      for (let i=0;i<2;i++){
+        const uy = (i===0? -1 : 1);
+        const zy = stdzChk.checked ? (uy - stats.my)/stats.sy : uy;
+        if (Math.abs(w[0]) > 1e-8){
+          const zx = -(w[1]*zy + b)/w[0];
+          const ux = stdzChk.checked ? zx*stats.sx + stats.mx : zx;
+          if (isFinite(ux)) pts.push([ux, uy]);
+        }
+      }
+    }
+    if (pts.length>=2){
+      const a = fromUnit(pts[0]), c = fromUnit(pts[1]);
+      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke();
+    }
+  }
+  function drawLoss(){
+    const W = miniLoss.width, H = miniLoss.height;
+    lctx.clearRect(0,0,W,H);
+    lctx.strokeStyle = '#2b3656'; lctx.lineWidth = 1;
+    lctx.beginPath(); lctx.moveTo(32, 8); lctx.lineTo(32, H-20); lctx.lineTo(W-8, H-20); lctx.stroke();
+    const N = Math.min(lossHistory.length, 200); if (N===0) return;
+    const arr = lossHistory.slice(-N);
+    const minL = Math.min(...arr), maxL = Math.max(...arr);
+    function X(i){ return 32 + (W-40) * (i/(N-1)); }
+    function Y(v){ if (maxL===minL) return H-20; const t=(v-minL)/(maxL-minL); return 8 + (H-28)*(1-t); }
+    lctx.strokeStyle = '#6ecbff'; lctx.lineWidth = 2;
+    lctx.beginPath(); lctx.moveTo(X(0), Y(arr[0])); for (let i=1;i<N;i++) lctx.lineTo(X(i), Y(arr[i])); lctx.stroke();
+    lctx.fillStyle = '#93a1bd'; lctx.font = '12px system-ui, sans-serif';
+    lctx.fillText(maxL.toFixed(3), 4, Y(maxL)+4);
+    lctx.fillText(minL.toFixed(3), 4, Y(minL)+4);
+  }
+
+  // Initial draw
+  draw(); updateStats(); drawLoss();
+})();
+</script>
+</body>
+</html>
