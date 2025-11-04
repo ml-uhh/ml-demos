@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Robust Regression (L1 Loss)</title>
+  <title>Robust Regression (L1 Loss) — Data Coordinates [-1, 1]²</title>
   <style>
     body {
       font-family: sans-serif;
@@ -16,6 +16,7 @@
       border: 1px solid #000;
       cursor: grab;
       margin-top: 10px;
+      background: #fafafa;
     }
     #controls {
       margin-top: 15px;
@@ -39,15 +40,15 @@
 </head>
 <body>
   <h1>Robust Regression (L1 Loss)</h1>
-  <p>Click to add points. Drag to move them. Toggle lines below.</p>
+  <p>Click to add points, drag to move them. Toggle lines below.</p>
   <canvas id="canvas" width="800" height="500"></canvas>
   
   <div id="legend">
-  <svg width="200" height="40">
-    <line x1="10" y1="10" x2="40" y2="10" stroke="red" stroke-width="4" />
-    <text x="50" y="14" font-size="16">L2 Regression</text>
-    <line x1="10" y1="30" x2="40" y2="30" stroke="green" stroke-width="4" />
-    <text x="50" y="34" font-size="16">L1 Regression</text>
+  <svg width="260" height="44">
+    <line x1="10" y1="12" x2="50" y2="12" stroke="red" stroke-width="4" />
+    <text x="60" y="16" font-size="16">L2 Regression</text>
+    <line x1="10" y1="34" x2="50" y2="34" stroke="green" stroke-width="4" />
+    <text x="60" y="38" font-size="16">L1 Regression</text>
   </svg>
   </div>
   
@@ -65,24 +66,48 @@
     const l2Toggle = document.getElementById('l2Toggle');
     const l1Toggle = document.getElementById('l1Toggle');
     const info = document.getElementById('info');
-    const points = [];
+    const points = [];   // store points in DATA coordinates: x,y ∈ [-1,1]
 
     let draggingPoint = null;
-    const radius = 7;
+    const radiusPx = 7;
+
+    const width = canvas.width;
+    const height = canvas.height;
+
+    // === Coordinate transforms (same mapping as in the polynomial regression demo) ===
+    function dataToPixel(x, y) {
+      return [(x + 1) / 2 * width, (1 - (y + 1) / 2) * height];
+    }
+    function pixelToData(px, py) {
+      return [px / width * 2 - 1, 1 - py / height * 2];
+    }
+
+    // Utility: find a point near a pixel position (hit test in pixel space)
+    function getPointAtPixel(px, py) {
+      for (const p of points) {
+        const [cx, cy] = dataToPixel(p.x, p.y);
+        const dx = cx - px;
+        const dy = cy - py;
+        if (dx * dx + dy * dy <= radiusPx * radiusPx) return p;
+      }
+      return null;
+    }
 
     canvas.addEventListener('mousedown', (e) => {
       const { offsetX, offsetY } = e;
-      draggingPoint = getPointAt(offsetX, offsetY);
+      draggingPoint = getPointAtPixel(offsetX, offsetY);
       if (!draggingPoint) {
-        points.push({ x: offsetX, y: offsetY });
+        const [x, y] = pixelToData(offsetX, offsetY);
+        points.push({ x, y });
       }
       draw();
     });
 
     canvas.addEventListener('mousemove', (e) => {
       if (draggingPoint) {
-        draggingPoint.x = e.offsetX;
-        draggingPoint.y = e.offsetY;
+        const [x, y] = pixelToData(e.offsetX, e.offsetY);
+        draggingPoint.x = Math.max(-1, Math.min(1, x));
+        draggingPoint.y = Math.max(-1, Math.min(1, y));
         draw();
       }
     });
@@ -101,20 +126,30 @@
     l2Toggle.addEventListener('change', draw);
     l1Toggle.addEventListener('change', draw);
 
-    function getPointAt(x, y) {
-      return points.find(p => {
-        const dx = p.x - x;
-        const dy = p.y - y;
-        return dx * dx + dy * dy <= radius * radius;
-      });
-    }
-
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+      // draw axis box and light grid for reference
+      ctx.save();
+      ctx.strokeStyle = '#ccc';
+      ctx.lineWidth = 1;
+      // border
+      ctx.strokeRect(0.5, 0.5, width-1, height-1);
+      // axes at x=0 and y=0
+      const [x0px, y0px] = dataToPixel(0, 0);
+      ctx.beginPath();
+      ctx.moveTo(0, y0px);
+      ctx.lineTo(width, y0px);
+      ctx.moveTo(x0px, 0);
+      ctx.lineTo(x0px, height);
+      ctx.stroke();
+      ctx.restore();
+
+      // draw points
       for (const p of points) {
+        const [px, py] = dataToPixel(p.x, p.y);
         ctx.beginPath();
-        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        ctx.arc(px, py, radiusPx, 0, Math.PI * 2);
         ctx.fillStyle = 'black';
         ctx.fill();
       }
@@ -123,13 +158,13 @@
 
       if (points.length >= 2) {
         if (l2Toggle.checked) {
-          const l2 = linearRegression(points);
+          const l2 = linearRegression(points); // in DATA coords
           drawLine(l2.m, l2.b, 'red');
           infoText += `L2: y = ${l2.m.toFixed(3)} * x + ${l2.b.toFixed(3)}<br>`;
         }
 
         if (l1Toggle.checked) {
-          const l1 = robustRegressionIRLS(points);
+          const l1 = robustRegressionIRLS(points); // in DATA coords
           drawLine(l1.m, l1.b, 'green');
           infoText += `L1: y = ${l1.m.toFixed(3)} * x + ${l1.b.toFixed(3)}`;
         }
@@ -138,20 +173,55 @@
       info.innerHTML = infoText;
     }
 
+    // Draw a line given y = m x + b, in DATA coords, clipped to canvas edges
     function drawLine(m, b, color) {
-      const x1 = 0;
-      const y1 = m * x1 + b;
-      const x2 = canvas.width;
-      const y2 = m * x2 + b;
+      // endpoints at x=-1 and x=1 in DATA space
+      let x1 = -1, y1 = m * x1 + b;
+      let x2 =  1, y2 = m * x2 + b;
+
+      // optional vertical clipping if needed (basic clipping to y∈[-1,1])
+      function clipSegmentToBox(x1, y1, x2, y2) {
+        // Liang-Barsky could be used; here a simple iterative clip to y
+        const points = [];
+        const addIfIn = (x, y) => { if (y >= -1 && y <= 1) points.push([x, y]); };
+        addIfIn(x1, y1); addIfIn(x2, y2);
+
+        // Intersections with y=-1 and y=1
+        if (Math.abs(x2 - x1) > 1e-12) {
+          const mloc = (y2 - y1) / (x2 - x1);
+          const bLoc = y1 - mloc * x1;
+          const xi_yneg = (-1 - bLoc) / mloc;
+          const xi_ypos = ( 1 - bLoc) / mloc;
+          if (xi_yneg >= -1 && xi_yneg <= 1) points.push([xi_yneg, -1]);
+          if (xi_ypos >= -1 && xi_ypos <= 1) points.push([xi_ypos,  1]);
+        } else {
+          // vertical in data coords: x = const
+          // intersect with y box
+          points.push([x1, -1], [x1, 1]);
+        }
+        // Keep two extreme points within box
+        points.sort((a,b)=>a[0]-b[0]);
+        // Filter to those inside the box
+        const inside = points.filter(([x,y]) => x>=-1 && x<=1 && y>=-1 && y<=1);
+        if (inside.length < 2) return null;
+        return [inside[0], inside[inside.length-1]];
+      }
+
+      const clipped = clipSegmentToBox(x1, y1, x2, y2);
+      if (!clipped) return;
+      const [[cx1, cy1], [cx2, cy2]] = clipped;
+      const [p1x, p1y] = dataToPixel(cx1, cy1);
+      const [p2x, p2y] = dataToPixel(cx2, cy2);
 
       ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
+      ctx.moveTo(p1x, p1y);
+      ctx.lineTo(p2x, p2y);
       ctx.strokeStyle = color;
       ctx.lineWidth = 3;
       ctx.stroke();
     }
 
+    // Ordinary least squares in DATA coords
     function linearRegression(data) {
       const n = data.length;
       const sumX = data.reduce((acc, p) => acc + p.x, 0);
@@ -171,6 +241,7 @@
       return { m, b };
     }
 
+    // IRLS for L1 loss in DATA coords
     function robustRegressionIRLS(data, maxIter = 100, epsilon = 1e-6) {
       let { m, b } = linearRegression(data);
 
