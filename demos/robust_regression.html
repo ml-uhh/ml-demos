@@ -242,7 +242,7 @@
     }
 
     // IRLS for L1 loss in DATA coords
-    function robustRegressionIRLS(data, maxIter = 100, epsilon = 1e-6) {
+    function robustRegressionIRLS(data, maxIter = 1000, epsilon = 1e-6) {
       let { m, b } = linearRegression(data);
 
       for (let iter = 0; iter < maxIter; iter++) {

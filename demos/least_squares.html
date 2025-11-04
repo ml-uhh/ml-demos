@@ -2,189 +2,272 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Least Squares Regression with D3.js</title>
+  <title>Least Squares Regression</title>
   <style>
-    body { font-family: sans-serif; text-align: center; }
-    #chart { margin: auto; }
-    button { font-size: 16px; padding: 8px 16px; margin: 10px; cursor: pointer; }
-    circle.point { fill: black; cursor: default; }
-    circle.point.hovered { fill: orange; cursor: pointer; }
+    body {
+      font-family: sans-serif;
+      text-align: center;
+    }
+    h1 {
+      margin-top: 20px;
+      font-size: 32px;
+    }
+    canvas {
+      border: 1px solid #000;
+      cursor: crosshair; /* default: cross */
+      margin-top: 10px;
+      background: #fafafa;
+    }
+    #controls {
+      margin-top: 15px;
+    }
+    button, label {
+      font-size: 16px;
+      padding: 10px 20px;
+      margin: 5px;
+      cursor: pointer;
+    }
+    input[type="checkbox"] {
+      transform: scale(1.5);
+      margin-right: 8px;
+    }
+    #info {
+      font-family: sans-serif;
+      margin-top: 15px;
+      font-size: 18px;
+    }
   </style>
 </head>
 <body>
   <h1>Least Squares Regression</h1>
-  <p>Click to add points. Drag to move them. Hover near a point to highlight it. Toggle to show residuals.</p>
-  <div id="chart"></div>
-  <div>
-    <button id="resetBtn">Reset</button>
-    <button id="toggleErrorBtn">Show Errors</button>
+  <p>Click to add points, drag to move them. Toggle lines below.</p>
+  <canvas id="canvas" width="800" height="500"></canvas>
+
+  <div id="controls">
+    <button id="resetBtn">Clear Points</button>
+    <label><input type="checkbox" id="l2Toggle" checked />Show line</label>
+    <label><input type="checkbox" id="errorsToggle" />Show errors</label>
   </div>
+  <div id="info"></div>
 
-  <!-- Load full D3 v7 UMD bundle -->
-  <script src="https://d3js.org/d3.v7.min.js"></script>
   <script>
-    const width = 800;
-    const height = 500;
-    const margin = { top: 20, right: 20, bottom: 40, left: 50 };
-    const innerWidth = width - margin.left - margin.right;
-    const innerHeight = height - margin.top - margin.bottom;
-    const hoverThreshold = 10; // pixels
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const resetBtn = document.getElementById('resetBtn');
+    const l2Toggle = document.getElementById('l2Toggle');
+    const errorsToggle = document.getElementById('errorsToggle');
+    const info = document.getElementById('info');
+    const points = [];
 
-    let points = [];
-    let showErrors = false;
-    let hoverIndex = null;
+    let draggingPoint = null;
+    let hoverPoint = null;
+    const radiusPx = 7;
 
-    const svg = d3.select('#chart')
-      .append('svg')
-      .attr('width', width)
-      .attr('height', height)
-      .style('border', '1px solid #000');
+    const width = canvas.width;
+    const height = canvas.height;
 
-    const g = svg.append('g')
-      .attr('transform', `translate(${margin.left},${margin.top})`);
-
-    const xScale = d3.scaleLinear()
-      .domain([0, innerWidth])
-      .range([0, innerWidth]);
-
-    const yScale = d3.scaleLinear()
-      .domain([0, innerHeight])
-      .range([innerHeight, 0]);
-
-    g.append('g')
-      .attr('transform', `translate(0,${innerHeight})`)
-      .call(d3.axisBottom(xScale));
-
-    g.append('g')
-      .call(d3.axisLeft(yScale));
-
-    const pointGroup = g.append('g');
-    const errorGroup = g.append('g');
-    const lineGroup = g.append('g');
-
-    // Add point on click (only if clicking on background)
-    svg.on('click', function(event) {
-      if (d3.select(event.target).node() === svg.node()) {
-        const [mx, my] = d3.pointer(event);
-        const x = xScale.invert(mx - margin.left);
-        const y = yScale.invert(my - margin.top);
-        points.push({ x, y });
-        update();
-      }
-    });
-
-    // Highlight nearest point on mousemove
-    g.on('mousemove', function(event) {
-      const [mx, my] = d3.pointer(event, g.node());
-      let nearest = null;
-      let minDist = Infinity;
-      points.forEach((d, i) => {
-        const dx = xScale(d.x) - mx;
-        const dy = yScale(d.y) - my;
-        const dist = Math.hypot(dx, dy);
-        if (dist < minDist) {
-          minDist = dist;
-          nearest = i;
-        }
-      });
-      if (minDist <= hoverThreshold) {
-        hoverIndex = nearest;
-        svg.style('cursor', 'pointer');
-      } else {
-        hoverIndex = null;
-        svg.style('cursor', 'default');
-      }
-      update();
-    }).on('mouseleave', () => {
-      hoverIndex = null;
-      svg.style('cursor', 'default');
-      update();
-    });
-
-    function update() {
-      // compute regression
-      let m = 0, b = 0;
-      if (points.length >= 2) {
-        const n = points.length;
-        const sumX = d3.sum(points, d => d.x);
-        const sumY = d3.sum(points, d => d.y);
-        const meanX = sumX / n;
-        const meanY = sumY / n;
-        const sumXY = d3.sum(points, d => d.x * d.y);
-        const sumX2 = d3.sum(points, d => d.x * d.x);
-        m = (sumXY - n * meanX * meanY) / (sumX2 - n * meanX ** 2);
-        b = meanY - m * meanX;
-      }
-
-      // draw line
-      lineGroup.selectAll('line.regression').remove();
-      if (points.length >= 2) {
-        lineGroup.append('line')
-          .attr('class', 'regression')
-          .attr('x1', xScale(0))
-          .attr('y1', yScale(b))
-          .attr('x2', xScale(innerWidth))
-          .attr('y2', yScale(m * innerWidth + b))
-          .attr('stroke', 'red')
-          .attr('stroke-width', 3);
-      }
-
-      // draw errors
-      errorGroup.selectAll('line.error').remove();
-      if (showErrors && points.length >= 2) {
-        errorGroup.selectAll('line.error')
-          .data(points)
-          .enter().append('line')
-            .attr('class', 'error')
-            .attr('x1', d => xScale(d.x))
-            .attr('y1', d => yScale(d.y))
-            .attr('x2', d => xScale(d.x))
-            .attr('y2', d => yScale(m * d.x + b))
-            .attr('stroke', 'blue')
-            .attr('stroke-dasharray', '4 4');
-      }
-
-      // draw points
-      const pts = pointGroup.selectAll('circle').data(points);
-      pts.enter().append('circle')
-        .attr('class', 'point')
-        .attr('r', 6)
-        .call(d3.drag()
-          .on('drag', (event, d) => {
-            const [mx, my] = d3.pointer(event, g.node());
-            d.x = xScale.invert(mx);
-            d.y = yScale.invert(my);
-            update();
-          }))
-        .merge(pts)
-        .attr('cx', (d, i) => xScale(d.x))
-        .attr('cy', (d, i) => yScale(d.y))
-        .attr('class', (d, i) => i === hoverIndex ? 'point hovered' : 'point');
-      pts.exit().remove();
-
-      // update info
-      const info = d3.select('#info');
-      if (points.length >= 2) {
-        info.text(`y = ${m.toFixed(3)}x + ${b.toFixed(3)}`);
-      } else {
-        info.text('');
-      }
+    function dataToPixel(x, y) {
+      return [(x + 1) / 2 * width, (1 - (y + 1) / 2) * height];
+    }
+    function pixelToData(px, py) {
+      return [px / width * 2 - 1, 1 - py / height * 2];
     }
 
-    // button handlers
-    d3.select('#resetBtn').on('click', () => {
-      points = [];
-      update();
-    });
-    d3.select('#toggleErrorBtn').on('click', function() {
-      showErrors = !showErrors;
-      this.textContent = showErrors ? 'Hide Errors' : 'Show Errors';
-      update();
+    function getPointAtPixel(px, py) {
+      for (const p of points) {
+        const [cx, cy] = dataToPixel(p.x, p.y);
+        const dx = cx - px;
+        const dy = cy - py;
+        if (dx * dx + dy * dy <= radiusPx * radiusPx) return p;
+      }
+      return null;
+    }
+
+    // --- restore full-window drag tracking ---
+    window.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const offsetX = e.clientX - rect.left;
+      const offsetY = e.clientY - rect.top;
+
+      if (draggingPoint) {
+        // still dragging even outside canvas
+        const [x, y] = pixelToData(offsetX, offsetY);
+        draggingPoint.x = Math.max(-1, Math.min(1, x));
+        draggingPoint.y = Math.max(-1, Math.min(1, y));
+        draw();
+      } else {
+        // hover detection only if inside canvas bounds
+        if (
+          offsetX >= 0 &&
+          offsetX <= canvas.width &&
+          offsetY >= 0 &&
+          offsetY <= canvas.height
+        ) {
+          const hit = getPointAtPixel(offsetX, offsetY);
+          hoverPoint = hit;
+          canvas.style.cursor = hit ? 'grab' : 'crosshair';
+        } else {
+          hoverPoint = null;
+          canvas.style.cursor = 'crosshair';
+        }
+        draw();
+      }
     });
 
-    // Initial render
-    update();
+    window.addEventListener('mouseup', () => {
+      draggingPoint = null;
+      canvas.style.cursor = hoverPoint ? 'grab' : 'crosshair';
+      draw();
+    });
+
+    canvas.addEventListener('mousedown', (e) => {
+      const { offsetX, offsetY } = e;
+      hoverPoint = getPointAtPixel(offsetX, offsetY);
+      draggingPoint = hoverPoint;
+      if (!draggingPoint) {
+        const [x, y] = pixelToData(offsetX, offsetY);
+        points.push({ x, y });
+      } else {
+        canvas.style.cursor = 'grabbing';
+      }
+      draw();
+    });
+
+    resetBtn.addEventListener('click', () => {
+      points.length = 0;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      info.textContent = '';
+      draw();
+    });
+
+    l2Toggle.addEventListener('change', draw);
+    errorsToggle.addEventListener('change', draw);
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // border + axes
+      ctx.save();
+      ctx.strokeStyle = '#ccc';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+      const [x0px, y0px] = dataToPixel(0, 0);
+      ctx.beginPath();
+      ctx.moveTo(0, y0px);
+      ctx.lineTo(width, y0px);
+      ctx.moveTo(x0px, 0);
+      ctx.lineTo(x0px, height);
+      ctx.stroke();
+      ctx.restore();
+
+      // points (orange when hovered or moved)
+      for (const p of points) {
+        const [px, py] = dataToPixel(p.x, p.y);
+        ctx.beginPath();
+        ctx.arc(px, py, radiusPx, 0, Math.PI * 2);
+        ctx.fillStyle = (p === hoverPoint || p === draggingPoint) ? 'orange' : 'black';
+        ctx.fill();
+      }
+
+      let infoText = "";
+
+      if (points.length >= 2 && l2Toggle.checked) {
+        const l2 = linearRegression(points);
+        drawLine(l2.m, l2.b, 'red');
+        infoText += `y = ${l2.m.toFixed(3)} * x + ${l2.b.toFixed(3)}`;
+
+        if (errorsToggle.checked) {
+          drawResiduals(l2.m, l2.b);
+        }
+      }
+
+      info.innerHTML = infoText;
+    }
+
+    function drawLine(m, b, color) {
+      let x1 = -1, y1 = m * x1 + b;
+      let x2 = 1, y2 = m * x2 + b;
+
+      function clipSegmentToBox(x1, y1, x2, y2) {
+        const pts = [];
+        const addIfIn = (x, y) => { if (y >= -1 && y <= 1) pts.push([x, y]); };
+        addIfIn(x1, y1); addIfIn(x2, y2);
+
+        if (Math.abs(x2 - x1) > 1e-12) {
+          const mloc = (y2 - y1) / (x2 - x1);
+          const bLoc = y1 - mloc * x1;
+          const xi_yneg = (-1 - bLoc) / mloc;
+          const xi_ypos = (1 - bLoc) / mloc;
+          if (xi_yneg >= -1 && xi_yneg <= 1) pts.push([xi_yneg, -1]);
+          if (xi_ypos >= -1 && xi_ypos <= 1) pts.push([xi_ypos, 1]);
+        } else {
+          pts.push([x1, -1], [x1, 1]);
+        }
+        pts.sort((a, b) => a[0] - b[0]);
+        const inside = pts.filter(([x, y]) => x >= -1 && x <= 1 && y >= -1 && y <= 1);
+        if (inside.length < 2) return null;
+        return [inside[0], inside[inside.length - 1]];
+      }
+
+      const clipped = clipSegmentToBox(x1, y1, x2, y2);
+      if (!clipped) return;
+      const [[cx1, cy1], [cx2, cy2]] = clipped;
+      const [p1x, p1y] = dataToPixel(cx1, cy1);
+      const [p2x, p2y] = dataToPixel(cx2, cy2);
+
+      ctx.beginPath();
+      ctx.moveTo(p1x, p1y);
+      ctx.lineTo(p2x, p2y);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+
+    function drawResiduals(m, b) {
+      ctx.save();
+      ctx.setLineDash([6, 6]);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'blue';
+
+      for (const p of points) {
+        const x = p.x;
+        const y = p.y;
+        const yhat = m * x + b;
+
+        const y1 = Math.max(-1, Math.min(1, y));
+        const y2 = Math.max(-1, Math.min(1, yhat));
+
+        const [px1, py1] = dataToPixel(x, y1);
+        const [px2, py2] = dataToPixel(x, y2);
+
+        ctx.beginPath();
+        ctx.moveTo(px1, py1);
+        ctx.lineTo(px2, py2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function linearRegression(data) {
+      const n = data.length;
+      const sumX = data.reduce((acc, p) => acc + p.x, 0);
+      const sumY = data.reduce((acc, p) => acc + p.y, 0);
+      const sumXY = data.reduce((acc, p) => acc + p.x * p.y, 0);
+      const sumX2 = data.reduce((acc, p) => acc + p.x * p.x, 0);
+
+      const meanX = sumX / n;
+      const meanY = sumY / n;
+
+      const numerator = sumXY - n * meanX * meanY;
+      const denominator = sumX2 - n * meanX * meanX;
+
+      const m = numerator / denominator;
+      const b = meanY - m * meanX;
+
+      return { m, b };
+    }
+
+    draw();
   </script>
-  <div id="info" style="margin-top: 15px; font-size:18px;"></div>
 </body>
 </html>
