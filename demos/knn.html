@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>K-Nearest Neighbors (KNN) – Multiclass (3 classes)</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+    }
+    h1 {
+      margin-top: 20px;
+      font-size: 32px;
+    }
+    canvas {
+      border: 1px solid #000;
+      cursor: crosshair;
+      margin-top: 10px;
+      background: #fafafa;
+      display: block;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    #controls {
+      margin-top: 15px;
+      text-align: center;
+    }
+    .control-row {
+      margin-top: 8px;
+    }
+    button, label {
+      font-size: 16px;
+      padding: 8px 15px;
+      margin: 4px;
+      cursor: pointer;
+    }
+    input[type="range"] {
+      vertical-align: middle;
+      margin-left: 10px;
+      margin-right: 10px;
+    }
+    #info {
+      margin-top: 15px;
+      font-size: 18px;
+    }
+    .colorDot {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 6px;
+      vertical-align: middle;
+      border: 1px solid #00000055;
+    }
+  </style>
+</head>
+<body>
+  <h1>K-Nearest Neighbors (KNN)</h1>
+  <p>Click to add points. Drag to move. Ctrl-click to delete.</p>
+
+  <canvas id="canvas" width="800" height="500"></canvas>
+
+  <!-- Controls directly under the canvas -->
+  <div id="controls">
+    <!-- Row 1 -->
+    <div class="control-row">
+      <button id="resetBtn">Clear Points</button>
+      <label><span class="colorDot" style="background:#e74c3c;"></span>
+        <input type="radio" name="classSel" value="red" checked /> Red
+      </label>
+      <label><span class="colorDot" style="background:#3498db;"></span>
+        <input type="radio" name="classSel" value="blue" /> Blue
+      </label>
+      <label><span class="colorDot" style="background:#2ecc71;"></span>
+        <input type="radio" name="classSel" value="green" /> Green
+      </label>
+    </div>
+
+    <!-- Row 2 -->
+    <div class="control-row">
+      <label>K:
+        <input type="range" id="kRange" min="1" max="31" step="2" value="3" />
+        <span id="kVal"></span>
+      </label>
+      <label><input type="checkbox" id="mapToggle" />Show decision map</label>
+      <label><input type="checkbox" id="neighborsToggle" />Show K neighbors</label>
+    </div>
+  </div>
+
+  <div id="info"></div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const resetBtn = document.getElementById('resetBtn');
+    const kRange = document.getElementById('kRange');
+    const kVal = document.getElementById('kVal');
+    const mapToggle = document.getElementById('mapToggle');
+    const neighborsToggle = document.getElementById('neighborsToggle');
+    const info = document.getElementById('info');
+    const classInputs = Array.from(document.querySelectorAll('input[name="classSel"]'));
+
+    const width = canvas.width, height = canvas.height;
+    const points = [];
+    let draggingPoint = null, hoverPoint = null;
+    const radiusPx = 7;
+
+    let inCanvas = false;
+    let mousePx = 0, mousePy = 0;
+
+    // Initialize K display and ensure checkboxes are off
+    kVal.textContent = kRange.value;
+    mapToggle.checked = false;
+    neighborsToggle.checked = false;
+
+    function dataToPixel(x, y) {
+      return [(x + 1) / 2 * width, (1 - (y + 1) / 2) * height];
+    }
+
+    function pixelToData(px, py) {
+      return [px / width * 2 - 1, 1 - py / height * 2];
+    }
+
+    function getPointAtPixel(px, py) {
+      for (const p of points) {
+        const [cx, cy] = dataToPixel(p.x, p.y);
+        const dx = cx - px, dy = cy - py;
+        if (dx * dx + dy * dy <= radiusPx * radiusPx) return p;
+      }
+      return null;
+    }
+
+    window.addEventListener('mousemove', (e) => {
+      const r = canvas.getBoundingClientRect();
+      mousePx = e.clientX - r.left;
+      mousePy = e.clientY - r.top;
+      if (draggingPoint) {
+        const [dx, dy] = pixelToData(mousePx, mousePy);
+        draggingPoint.x = Math.max(-1, Math.min(1, dx));
+        draggingPoint.y = Math.max(-1, Math.min(1, dy));
+        draw();
+      } else {
+        if (mousePx >= 0 && mousePx <= width && mousePy >= 0 && mousePy <= height) {
+          inCanvas = true;
+          const hit = getPointAtPixel(mousePx, mousePy);
+          hoverPoint = hit;
+          canvas.style.cursor = hit ? 'grab' : 'crosshair';
+        } else {
+          inCanvas = false;
+          hoverPoint = null;
+          canvas.style.cursor = 'crosshair';
+        }
+        draw();
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      draggingPoint = null;
+      canvas.style.cursor = hoverPoint ? 'grab' : 'crosshair';
+      draw();
+    });
+
+    canvas.addEventListener('mousedown', (e) => {
+      const { offsetX: x, offsetY: y, ctrlKey, metaKey } = e;
+      const hit = getPointAtPixel(x, y);
+      if (hit && (ctrlKey || metaKey)) {
+        points.splice(points.indexOf(hit), 1);
+        hoverPoint = null;
+        draw();
+        return;
+      }
+      if (hit) {
+        hoverPoint = hit;
+        draggingPoint = hit;
+        canvas.style.cursor = 'grabbing';
+      } else {
+        const [dx, dy] = pixelToData(x, y);
+        const cls = classInputs.find(i => i.checked).value;
+        points.push({ x: dx, y: dy, label: cls });
+      }
+      draw();
+    });
+
+    resetBtn.onclick = () => {
+      points.length = 0;
+      ctx.clearRect(0, 0, width, height);
+      info.textContent = '';
+      draw();
+    };
+
+    kRange.oninput = () => {
+      kVal.textContent = kRange.value;
+      draw();
+    };
+
+    mapToggle.onchange = draw;
+    neighborsToggle.onchange = draw;
+    classInputs.forEach(el => el.onchange = draw);
+
+    function knnPredict(x, y, k) {
+      if (points.length === 0) return { label: null };
+      const d = points.map(p => ({ d2: (p.x - x) ** 2 + (p.y - y) ** 2, label: p.label, p }));
+      d.sort((a, b) => a.d2 - b.d2);
+      const kk = Math.min(k, d.length);
+      const counts = { red: 0, blue: 0, green: 0 }, sums = { red: 0, blue: 0, green: 0 };
+      for (let i = 0; i < kk; i++) {
+        counts[d[i].label]++; sums[d[i].label] += d[i].d2;
+      }
+      const maxCount = Math.max(counts.red, counts.blue, counts.green);
+      let cand = ['red', 'blue', 'green'].filter(c => counts[c] === maxCount);
+      if (cand.length === 1) return { label: cand[0], neighbors: d.slice(0, kk) };
+      let best = cand[0], bestSum = sums[best];
+      for (let i = 1; i < cand.length; i++) {
+        const c = cand[i]; if (sums[c] < bestSum) { best = c; bestSum = sums[c]; }
+      }
+      cand = cand.filter(c => sums[c] === bestSum);
+      if (cand.length === 1) return { label: cand[0], neighbors: d.slice(0, kk) };
+      for (let i = 0; i < kk; i++) {
+        if (cand.includes(d[i].label)) return { label: d[i].label, neighbors: d.slice(0, kk) };
+      }
+      return { label: cand[0], neighbors: d.slice(0, kk) };
+    }
+
+    function drawAxes() {
+      ctx.save();
+      ctx.strokeStyle = '#ccc';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+      const [x0, y0] = dataToPixel(0, 0);
+      ctx.beginPath();
+      ctx.moveTo(0, y0);
+      ctx.lineTo(width, y0);
+      ctx.moveTo(x0, 0);
+      ctx.lineTo(x0, height);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawPoints() {
+      for (const p of points) {
+        const [px, py] = dataToPixel(p.x, p.y);
+        ctx.beginPath();
+        ctx.arc(px, py, radiusPx, 0, 2 * Math.PI);
+        const base = p.label === 'red' ? '#e74c3c' : p.label === 'blue' ? '#3498db' : '#2ecc71';
+        ctx.fillStyle = base; ctx.fill();
+        ctx.lineWidth = (p === hoverPoint || p === draggingPoint) ? 3 : 1.5;
+        ctx.strokeStyle = '#000000aa'; ctx.stroke();
+      }
+    }
+
+    function drawDecisionMap() {
+      if (!mapToggle.checked || points.length === 0) return;
+      const step = 3; const k = parseInt(kRange.value);
+      const tint = { red: '#f8c9c4', blue: '#c9def4', green: '#cfeee0' };
+      ctx.save(); ctx.globalAlpha = 0.9;
+      for (let py = 0; py < height; py += step) {
+        for (let px = 0; px < width; px += step) {
+          const [x, y] = pixelToData(px + step / 2, py + step / 2);
+          const r = knnPredict(x, y, k);
+          if (!r.label) continue;
+          ctx.fillStyle = tint[r.label];
+          ctx.fillRect(px, py, step, step);
+        }
+      }
+      ctx.restore();
+    }
+
+    function drawNeighborsAtCursor() {
+      if (!neighborsToggle.checked || !inCanvas || points.length === 0) return;
+      const k = parseInt(kRange.value);
+      const [x, y] = pixelToData(mousePx, mousePy);
+      const res = knnPredict(x, y, k);
+      if (!res || !res.neighbors) return;
+      ctx.save();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = '#555';
+      ctx.beginPath();
+      ctx.moveTo(mousePx - 6, mousePy); ctx.lineTo(mousePx + 6, mousePy);
+      ctx.moveTo(mousePx, mousePy - 6); ctx.lineTo(mousePx, mousePy + 6);
+      ctx.stroke();
+      ctx.globalAlpha = 0.8; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
+      for (const nb of res.neighbors) {
+        const p = nb.p; const [px, py] = dataToPixel(p.x, p.y);
+        ctx.beginPath(); ctx.moveTo(mousePx, mousePy); ctx.lineTo(px, py); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      for (const nb of res.neighbors) {
+        const p = nb.p; const [px, py] = dataToPixel(p.x, p.y);
+        ctx.beginPath(); ctx.arc(px, py, radiusPx + 3, 0, 2 * Math.PI);
+        ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, width, height);
+      drawDecisionMap(); drawAxes(); drawPoints(); drawNeighborsAtCursor();
+      const reds = points.filter(p => p.label === 'red').length;
+      const blues = points.filter(p => p.label === 'blue').length;
+      const greens = points.filter(p => p.label === 'green').length;
+      info.innerHTML = `Red: ${reds}, Blue: ${blues}, Green: ${greens}`;
+    }
+
+    draw();
+  </script>
+</body>
+</html>
