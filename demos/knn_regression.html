@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>K-Nearest Neighbors (KNN) – Regression</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; }
+    h1 { margin-top: 20px; font-size: 32px; }
+    canvas {
+      border: 1px solid #000; cursor: crosshair; margin-top: 10px; background: #fafafa;
+      display: block; margin-left: auto; margin-right: auto;
+    }
+    #controls { margin-top: 15px; text-align: center; }
+    .control-row { margin-top: 8px; }
+    button, label { font-size: 16px; padding: 8px 15px; margin: 4px; cursor: pointer; }
+    input[type="range"] { vertical-align: middle; margin-left: 10px; margin-right: 10px; }
+    #info { margin-top: 15px; font-size: 18px; }
+  </style>
+</head>
+<body>
+  <h1>K-Nearest Neighbors (KNN) – Regression</h1>
+  <p>Click to add points. Drag to move. Ctrl-click to delete.</p>
+
+  <canvas id="canvas" width="800" height="500"></canvas>
+
+  <!-- Controls directly under the canvas -->
+  <div id="controls">
+    <!-- Row 1 -->
+    <div class="control-row">
+      <button id="resetBtn">Clear Points</button>
+    </div>
+
+    <!-- Row 2 -->
+    <div class="control-row">
+      <label>K:
+        <input type="range" id="kRange" min="1" max="21" step="2" value="3" />
+        <span id="kVal"></span>
+      </label>
+      <label><input type="checkbox" id="curveToggle" />Show prediction curve</label>
+      <label><input type="checkbox" id="neighborsToggle" />Show K neighbors</label>
+      <label><input type="checkbox" id="weightToggle" />Use distance weighting</label>
+    </div>
+  </div>
+
+  <div id="info"></div>
+
+  <script>
+    // ===== Setup =====
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const resetBtn = document.getElementById('resetBtn');
+    const kRange = document.getElementById('kRange');
+    const kVal = document.getElementById('kVal');
+    const curveToggle = document.getElementById('curveToggle');
+    const neighborsToggle = document.getElementById('neighborsToggle');
+    const weightToggle = document.getElementById('weightToggle');
+    const info = document.getElementById('info');
+
+    const width = canvas.width, height = canvas.height;
+
+    // Data points: {x, y}
+    const points = [];
+
+    // Interaction state
+    let draggingPoint = null, hoverPoint = null;
+    const radiusPx = 7;
+    let inCanvas = false;
+    let mousePx = 0, mousePy = 0;
+
+    // Init UI defaults
+    kVal.textContent = kRange.value;
+    curveToggle.checked = false;
+    neighborsToggle.checked = false;
+    weightToggle.checked = false;
+
+    // ===== Coordinate transforms (range [-1,1] in both x and y) =====
+    function dataToPixel(x, y) { return [(x + 1) / 2 * width, (1 - (y + 1) / 2) * height]; }
+    function pixelToData(px, py) { return [px / width * 2 - 1, 1 - py / height * 2]; }
+
+    // ===== Hit test =====
+    function getPointAtPixel(px, py) {
+      for (const p of points) {
+        const [cx, cy] = dataToPixel(p.x, p.y);
+        const dx = cx - px, dy = cy - py;
+        if (dx*dx + dy*dy <= radiusPx*radiusPx) return p;
+      }
+      return null;
+    }
+
+    // ===== Events (drag persists outside canvas) =====
+    window.addEventListener('mousemove', e => {
+      const r = canvas.getBoundingClientRect();
+      mousePx = e.clientX - r.left;
+      mousePy = e.clientY - r.top;
+      if (draggingPoint) {
+        const [dx, dy] = pixelToData(mousePx, mousePy);
+        draggingPoint.x = Math.max(-1, Math.min(1, dx));
+        draggingPoint.y = Math.max(-1, Math.min(1, dy));
+        draw();
+      } else {
+        if (mousePx >= 0 && mousePx <= width && mousePy >= 0 && mousePy <= height) {
+          inCanvas = true;
+          const hit = getPointAtPixel(mousePx, mousePy);
+          hoverPoint = hit;
+          canvas.style.cursor = hit ? 'grab' : 'crosshair';
+        } else {
+          inCanvas = false;
+          hoverPoint = null;
+          canvas.style.cursor = 'crosshair';
+        }
+        draw();
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      draggingPoint = null;
+      canvas.style.cursor = hoverPoint ? 'grab' : 'crosshair';
+      draw();
+    });
+
+    canvas.addEventListener('mousedown', e => {
+      const { offsetX:x, offsetY:y, ctrlKey, metaKey } = e;
+      const hit = getPointAtPixel(x, y);
+      if (hit && (ctrlKey || metaKey)) {
+        points.splice(points.indexOf(hit), 1);
+        hoverPoint = null;
+        draw();
+        return;
+      }
+      if (hit) {
+        hoverPoint = hit;
+        draggingPoint = hit;
+        canvas.style.cursor = 'grabbing';
+      } else {
+        const [dx, dy] = pixelToData(x, y);
+        points.push({ x: dx, y: dy });
+      }
+      draw();
+    });
+
+    // Controls
+    resetBtn.onclick = () => { points.length = 0; ctx.clearRect(0,0,width,height); info.textContent=''; draw(); };
+    kRange.oninput = () => { kVal.textContent = kRange.value; draw(); };
+    curveToggle.onchange = draw;
+    neighborsToggle.onchange = draw;
+    weightToggle.onchange = draw;
+
+    // ===== KNN Regression core (spike-free) =====
+    function knnRegress(x0, k, weighted) {
+      if (points.length === 0) return { yhat: null, neighbors: [] };
+
+      const sorted = points
+        .map(p => ({ dist: Math.abs(p.x - x0), p }))
+        .sort((a, b) => a.dist - b.dist);
+
+      const kk = Math.min(k, sorted.length);
+      const nbrs = sorted.slice(0, kk).map(e => e.p);
+
+      if (!weighted) {
+        const mean = nbrs.reduce((s, p) => s + p.y, 0) / nbrs.length;
+        return { yhat: mean, neighbors: nbrs };
+      } else {
+        const zeros = nbrs.filter(p => Math.abs(p.x - x0) === 0);
+        if (zeros.length > 0) {
+          const yhatExact = zeros.reduce((s, p) => s + p.y, 0) / zeros.length;
+          return { yhat: yhatExact, neighbors: nbrs };
+        }
+        const eps = 1e-6;
+        let num = 0, den = 0;
+        for (const p of nbrs) {
+          const w = 1 / (Math.abs(p.x - x0) + eps);
+          num += w * p.y; den += w;
+        }
+        const yhat = den > 0 ? num / den : null;
+        return { yhat, neighbors: nbrs };
+      }
+    }
+
+    // ===== Drawing =====
+    function drawAxes() {
+      ctx.save();
+      ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1;
+      ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+      const [x0, y0] = dataToPixel(0, 0);
+      ctx.beginPath();
+      ctx.moveTo(0, y0); ctx.lineTo(width, y0);
+      ctx.moveTo(x0, 0); ctx.lineTo(x0, height);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawPoints() {
+      for (const p of points) {
+        const [px, py] = dataToPixel(p.x, p.y);
+        ctx.beginPath();
+        ctx.arc(px, py, radiusPx, 0, 2 * Math.PI);
+        ctx.fillStyle = '#3498db';
+        ctx.fill();
+        ctx.lineWidth = (p === hoverPoint || p === draggingPoint) ? 3 : 1.5;
+        ctx.strokeStyle = '#000000aa';
+        ctx.stroke();
+      }
+    }
+
+    function drawPredictionCurve() {
+      if (!curveToggle.checked || points.length === 0) return;
+      const k = parseInt(kRange.value, 10);
+      const weighted = weightToggle.checked;
+      ctx.save();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#2c3e50';
+      let started = false;
+      ctx.beginPath();
+      for (let px = 0; px < width; px += 1) {
+        const [x] = pixelToData(px, 0);
+        const { yhat } = knnRegress(x, k, weighted);
+        if (yhat == null) continue;
+        const [, py] = dataToPixel(x, yhat);
+        if (!started) { ctx.moveTo(px, py); started = true; }
+        else { ctx.lineTo(px, py); }
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawNeighborsAtCursor() {
+      if (!neighborsToggle.checked || !inCanvas || points.length === 0) return;
+      const k = parseInt(kRange.value, 10);
+      const weighted = weightToggle.checked;
+      const [x0] = pixelToData(mousePx, 0);
+      const { yhat, neighbors } = knnRegress(x0, k, weighted);
+      if (yhat === null) return;
+
+      const [, pyhat] = dataToPixel(x0, yhat);
+      ctx.save();
+      // crosshair at (x0, yhat)
+      ctx.lineWidth = 1.5; ctx.strokeStyle = '#555';
+      ctx.beginPath();
+      ctx.moveTo(mousePx - 6, pyhat); ctx.lineTo(mousePx + 6, pyhat);
+      ctx.moveTo(mousePx, pyhat - 6); ctx.lineTo(mousePx, pyhat + 6);
+      ctx.stroke();
+
+      // dashed lines to neighbors
+      ctx.globalAlpha = 0.85; ctx.setLineDash([5,4]); ctx.lineWidth = 1.5;
+      for (const p of neighbors) {
+        const [px, py] = dataToPixel(p.x, p.y);
+        ctx.beginPath(); ctx.moveTo(mousePx, pyhat); ctx.lineTo(px, py); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+
+      // halo neighbors
+      for (const p of neighbors) {
+        const [px, py] = dataToPixel(p.x, p.y);
+        ctx.beginPath(); ctx.arc(px, py, radiusPx + 3, 0, 2*Math.PI);
+        ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, width, height);
+      drawAxes();
+      drawPredictionCurve();
+      drawPoints();
+      drawNeighborsAtCursor();
+      info.textContent = `Points: ${points.length}`;
+    }
+
+    // Initial paint
+    draw();
+  </script>
+</body>
+</html>
