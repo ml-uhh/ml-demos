@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Decision Tree – Multiclass (3 classes) + Diagram</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; }
+    h1 { margin-top: 20px; font-size: 32px; }
+    #viz {
+      display: inline-flex;
+      gap: 16px;
+      margin-top: 10px;
+      align-items: flex-start;
+    }
+    canvas {
+      border: 1px solid #000;
+      background: #fafafa;
+    }
+    #dataCanvas { cursor: crosshair; display: block; }
+    #treeCanvas { cursor: default; display: block; }
+    #controls { margin-top: 15px; text-align: center; }
+    .control-row { margin-top: 8px; }
+    button, label { font-size: 16px; padding: 8px 15px; margin: 4px; cursor: pointer; }
+    input[type="range"] { vertical-align: middle; margin-left: 10px; margin-right: 10px; }
+    #info { margin-top: 15px; font-size: 18px; }
+    .colorDot {
+      display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+      margin-right: 6px; vertical-align: middle; border: 1px solid #00000055;
+    }
+  </style>
+</head>
+<body>
+  <h1>Decision Tree – Multiclass (3 classes)</h1>
+  <p>Click to add points. Drag to move (even outside canvas). Ctrl-click to delete. Toggle decision map and split lines. The tree diagram updates live.</p>
+
+  <!-- Side-by-side visualization -->
+  <div id="viz">
+    <canvas id="dataCanvas" width="800" height="500"></canvas>
+    <canvas id="treeCanvas" width="500" height="500"></canvas>
+  </div>
+
+  <!-- Controls under the canvases -->
+  <div id="controls">
+    <!-- Row 1 -->
+    <div class="control-row">
+      <button id="resetBtn">Clear Points</button>
+      <label><span class="colorDot" style="background:#e74c3c;"></span>
+        <input type="radio" name="classSel" value="red" checked /> Red
+      </label>
+      <label><span class="colorDot" style="background:#3498db;"></span>
+        <input type="radio" name="classSel" value="blue" /> Blue
+      </label>
+      <label><span class="colorDot" style="background:#2ecc71;"></span>
+        <input type="radio" name="classSel" value="green" /> Green
+      </label>
+    </div>
+
+    <!-- Row 2 -->
+    <div class="control-row">
+      <label>Max depth:
+        <input type="range" id="depthRange" min="1" max="10" step="1" value="3" />
+        <span id="depthVal"></span>
+      </label>
+      <label>Min samples/leaf:
+        <input type="range" id="minLeafRange" min="1" max="20" step="1" value="1" />
+        <span id="minLeafVal"></span>
+      </label>
+      <label><input type="checkbox" id="mapToggle" />Show decision map</label>
+      <label><input type="checkbox" id="splitsToggle" />Show split lines</label>
+    </div>
+  </div>
+
+  <div id="info"></div>
+
+  <script>
+    // ===== Data canvas & UI =====
+    const dataCanvas = document.getElementById('dataCanvas');
+    const ctx = dataCanvas.getContext('2d');
+    const treeCanvas = document.getElementById('treeCanvas');
+    const tctx = treeCanvas.getContext('2d');
+
+    const resetBtn = document.getElementById('resetBtn');
+    const depthRange = document.getElementById('depthRange');
+    const depthVal = document.getElementById('depthVal');
+    const minLeafRange = document.getElementById('minLeafRange');
+    const minLeafVal = document.getElementById('minLeafVal');
+    const mapToggle = document.getElementById('mapToggle');
+    const splitsToggle = document.getElementById('splitsToggle');
+    const info = document.getElementById('info');
+    const classInputs = Array.from(document.querySelectorAll('input[name="classSel"]'));
+
+    const width = dataCanvas.width, height = dataCanvas.height;
+
+    // State
+    const points = []; // {x,y,label:'red'|'blue'|'green'}
+    let draggingPoint = null, hoverPoint = null;
+    const radiusPx = 7;
+
+    // Defaults: checkboxes OFF, slider labels set
+    mapToggle.checked = false;
+    splitsToggle.checked = false;
+    depthVal.textContent = depthRange.value;
+    minLeafVal.textContent = minLeafRange.value;
+
+    // ===== Coordinate transforms (data canvas) =====
+    function dataToPixel(x, y) { return [(x + 1) / 2 * width, (1 - (y + 1) / 2) * height]; }
+    function pixelToData(px, py) { return [px / width * 2 - 1, 1 - py / height * 2]; }
+
+    // ===== Hit detection =====
+    function getPointAtPixel(px, py) {
+      for (const p of points) {
+        const [cx, cy] = dataToPixel(p.x, p.y);
+        const dx = cx - px, dy = cy - py;
+        if (dx*dx + dy*dy <= radiusPx*radiusPx) return p;
+      }
+      return null;
+    }
+
+    // ===== Mouse interactions (drag persists outside canvas) =====
+    window.addEventListener('mousemove', (e) => {
+      const r = dataCanvas.getBoundingClientRect();
+      const x = e.clientX - r.left, y = e.clientY - r.top;
+      if (draggingPoint) {
+        const [dx, dy] = pixelToData(x, y);
+        draggingPoint.x = Math.max(-1, Math.min(1, dx));
+        draggingPoint.y = Math.max(-1, Math.min(1, dy));
+        draw();
+      } else {
+        if (x>=0 && x<=width && y>=0 && y<=height) {
+          const hit = getPointAtPixel(x, y);
+          hoverPoint = hit;
+          dataCanvas.style.cursor = hit ? 'grab' : 'crosshair';
+        } else {
+          hoverPoint = null;
+          dataCanvas.style.cursor = 'crosshair';
+        }
+        draw();
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      draggingPoint = null;
+      dataCanvas.style.cursor = hoverPoint ? 'grab' : 'crosshair';
+      draw();
+    });
+
+    dataCanvas.addEventListener('mousedown', (e) => {
+      const { offsetX:x, offsetY:y, ctrlKey, metaKey } = e;
+      const hit = getPointAtPixel(x, y);
+      if (hit && (ctrlKey || metaKey)) { // delete
+        points.splice(points.indexOf(hit), 1);
+        hoverPoint = null;
+        draw();
+        return;
+      }
+      if (hit) {
+        draggingPoint = hit;
+        dataCanvas.style.cursor = 'grabbing';
+      } else {
+        const [dx, dy] = pixelToData(x, y);
+        const cls = classInputs.find(i => i.checked).value;
+        points.push({ x: dx, y: dy, label: cls });
+      }
+      draw();
+    });
+
+    // Controls
+    resetBtn.onclick = () => { points.length = 0; draw(); };
+    depthRange.oninput = () => { depthVal.textContent = depthRange.value; draw(); };
+    minLeafRange.oninput = () => { minLeafVal.textContent = minLeafRange.value; draw(); };
+    mapToggle.onchange = draw; splitsToggle.onchange = draw;
+    classInputs.forEach(el => el.onchange = draw);
+
+    // ===== Decision Tree (axis-aligned) =====
+    function gini(counts) {
+      const total = counts.red + counts.blue + counts.green;
+      if (total === 0) return 0;
+      const pr = counts.red / total, pb = counts.blue / total, pg = counts.green / total;
+      return 1 - (pr*pr + pb*pb + pg*pg);
+    }
+    function countsOf(arr) {
+      const c = { red:0, blue:0, green:0 };
+      for (const p of arr) c[p.label]++;
+      return c;
+    }
+    function majorityLabel(arr) {
+      const c = countsOf(arr);
+      const order = ['red','blue','green']; // deterministic tie-breaker
+      let best = order[0];
+      for (const lab of order) if (c[lab] > c[best]) best = lab;
+      return best;
+    }
+
+    function buildTree(data, depth, maxDepth, minLeaf) {
+      if (data.length === 0) return { leaf: true, label: null };
+
+      const currentCounts = countsOf(data);
+      const currentGini = gini(currentCounts);
+
+      // Stop if pure, depth limit reached, or not enough samples to split
+      if (currentGini === 0 || depth >= maxDepth || data.length < 2*minLeaf) {
+        return { leaf: true, label: majorityLabel(data), counts: currentCounts };
+      }
+
+      let bestFeature = null, bestThresh = null, bestGain = -Infinity;
+      let bestLeft = null, bestRight = null;
+
+      const feats = ['x','y'];
+      for (const feat of feats) {
+        const sorted = data.slice().sort((a,b) => a[feat] - b[feat]);
+        const vals = sorted.map(p => p[feat]);
+        for (let i = 0; i < sorted.length - 1; i++) {
+          const v1 = vals[i], v2 = vals[i+1];
+          if (v1 === v2) continue; // no separating threshold here
+          const thr = (v1 + v2) / 2;
+
+          const left = [], right = [];
+          for (const p of sorted) (p[feat] <= thr ? left : right).push(p);
+          if (left.length < minLeaf || right.length < minLeaf) continue;
+
+          const gl = gini(countsOf(left));
+          const gr = gini(countsOf(right));
+          const gain = currentGini - (left.length/data.length)*gl - (right.length/data.length)*gr;
+
+          if (gain > bestGain) {
+            bestGain = gain; bestFeature = feat; bestThresh = thr;
+            bestLeft = left; bestRight = right;
+          }
+        }
+      }
+
+      // Require a *meaningful* improvement; small eps handles tiny rounding errors
+      if (!(bestLeft && bestRight) || bestGain <= 1e-12) {
+        return { leaf: true, label: majorityLabel(data), counts: currentCounts };
+      }
+
+      return {
+        leaf: false,
+        feature: bestFeature,
+        threshold: bestThresh,
+        left: buildTree(bestLeft,  depth+1, maxDepth, minLeaf),
+        right: buildTree(bestRight, depth+1, maxDepth, minLeaf)
+      };
+    }
+
+    function predictTree(tree, x, y) {
+      if (!tree || tree.leaf) return tree ? tree.label : null;
+      const val = (tree.feature === 'x') ? x : y;
+      return (val <= tree.threshold)
+        ? predictTree(tree.left, x, y)
+        : predictTree(tree.right, x, y);
+    }
+
+    // ===== Tree utilities for diagram =====
+    function countLeaves(node) {
+      if (!node) return 0;
+      if (node.leaf) return 1;
+      return countLeaves(node.left) + countLeaves(node.right);
+    }
+
+    function drawRoundRect(ctx, x, y, w, h, r) {
+      const rr = Math.min(r, w/2, h/2);
+      ctx.beginPath();
+      ctx.moveTo(x+rr, y);
+      ctx.arcTo(x+w, y,   x+w, y+h, rr);
+      ctx.arcTo(x+w, y+h, x,   y+h, rr);
+      ctx.arcTo(x,   y+h, x,   y,   rr);
+      ctx.arcTo(x,   y,   x+w, y,   rr);
+      ctx.closePath();
+    }
+
+    // ===== Edge-safe layout (no overflow) =====
+    function layoutTree(node, depth, state) {
+      // state: { leafIndex, leafCount, marginX, marginY, vSpacing, centerMin, centerMax }
+      if (!node) return;
+
+      const ty = state.marginY + depth * state.vSpacing;
+
+      if (node.leaf) {
+        const span = state.centerMax - state.centerMin;
+        const dx = (state.leafCount > 1) ? (span / (state.leafCount - 1)) : 0;
+        let tx = (state.leafCount > 1)
+          ? state.centerMin + state.leafIndex * dx
+          : (state.centerMin + state.centerMax) / 2;
+        tx = Math.max(state.centerMin, Math.min(state.centerMax, tx));
+        node.tx = tx; node.ty = ty;
+        state.leafIndex += 1;
+      } else {
+        layoutTree(node.left,  depth + 1, state);
+        layoutTree(node.right, depth + 1, state);
+        let tx = (node.left.tx + node.right.tx) / 2;
+        tx = Math.max(state.centerMin, Math.min(state.centerMax, tx));
+        node.tx = tx; node.ty = ty;
+      }
+    }
+
+    function drawTreeDiagram(tree) {
+      tctx.clearRect(0, 0, treeCanvas.width, treeCanvas.height);
+
+      if (!tree) {
+        tctx.save();
+        tctx.fillStyle = '#333';
+        tctx.font = '14px sans-serif';
+        tctx.fillText('Add points to build the tree', 16, 28);
+        tctx.restore();
+        return;
+      }
+
+      const W = treeCanvas.width, H = treeCanvas.height;
+      const marginX = 24, marginY = 24;
+
+      // Final node box size per your request
+      const boxW = 80, boxH = 38;
+
+      // Slightly tighter vertical spacing
+      const vSpacing = Math.max(65, (H - 2*marginY) / 6);
+
+      // SAFE band for node centers (keeps boxes inside canvas)
+      const centerMin = marginX + boxW / 2;
+      const centerMax = W - marginX - boxW / 2;
+
+      // Layout
+      const leaves = Math.max(1, countLeaves(tree));
+      const state = {
+        leafIndex: 0,
+        leafCount: leaves,
+        marginX,
+        marginY,
+        vSpacing,
+        centerMin,
+        centerMax
+      };
+      layoutTree(tree, 0, state);
+
+      // --- Edges ---
+      tctx.save();
+      tctx.strokeStyle = '#555';
+      tctx.lineWidth = 1.5;
+      tctx.setLineDash([6, 4]);
+
+      (function drawEdges(n) {
+        if (!n || n.leaf) return;
+        const px = n.tx, py = n.ty + boxH/2;
+        const lx = n.left.tx,  ly = n.left.ty  - boxH/2;
+        const rx = n.right.tx, ry = n.right.ty - boxH/2;
+
+        tctx.beginPath(); tctx.moveTo(px, py); tctx.lineTo(lx, ly); tctx.stroke();
+        tctx.beginPath(); tctx.moveTo(px, py); tctx.lineTo(rx, ry); tctx.stroke();
+
+        drawEdges(n.left); drawEdges(n.right);
+      })(tree);
+
+      tctx.setLineDash([]);
+
+      // --- Boxes ---
+      (function drawBoxes(n) {
+        if (!n) return;
+
+        drawRoundRect(tctx, n.tx - boxW/2, n.ty - boxH/2, boxW, boxH, 8);
+        tctx.strokeStyle = '#333';
+        tctx.lineWidth = 1.5;
+        tctx.fillStyle = '#fff';
+        tctx.fill();
+        tctx.stroke();
+
+        tctx.fillStyle = '#111';
+        tctx.font = '12px sans-serif';
+        tctx.textAlign = 'center';
+        tctx.textBaseline = 'middle';
+
+        if (n.leaf) {
+          const labelColor =
+            n.label === 'red'   ? '#e74c3c' :
+            n.label === 'blue'  ? '#3498db' :
+                                  '#2ecc71';
+
+          // Your preferred offsets for smaller boxes
+          tctx.fillStyle = '#111';
+          tctx.fillText('Leaf →', n.tx - 16, n.ty - 8);
+          tctx.fillStyle = labelColor;
+          tctx.fillText(n.label, n.tx + 22, n.ty - 8);
+
+          const c = n.counts || {red:0, blue:0, green:0};
+          tctx.fillStyle = '#666';
+          tctx.fillText(`r:${c.red} b:${c.blue} g:${c.green}`, n.tx, n.ty + 10);
+        } else {
+          const thr = (Math.round(n.threshold * 100) / 100).toFixed(2);
+          const feat = n.feature.toUpperCase();
+          tctx.fillText(`${feat} ≤ ${thr}`, n.tx, n.ty);
+        }
+
+        drawBoxes(n.left); drawBoxes(n.right);
+      })(tree);
+
+      tctx.restore();
+    }
+
+    // ===== Decision map & split lines on data canvas =====
+    function drawAxes() {
+      ctx.save();
+      ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1;
+      ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+      const [x0, y0] = dataToPixel(0, 0);
+      ctx.beginPath();
+      ctx.moveTo(0, y0); ctx.lineTo(width, y0);
+      ctx.moveTo(x0, 0); ctx.lineTo(x0, height);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawPoints() {
+      for (const p of points) {
+        const [px, py] = dataToPixel(p.x, p.y);
+        ctx.beginPath();
+        ctx.arc(px, py, radiusPx, 0, 2*Math.PI);
+        const fill = p.label === 'red' ? '#e74c3c' : (p.label === 'blue' ? '#3498db' : '#2ecc71');
+        ctx.fillStyle = fill; ctx.fill();
+        ctx.lineWidth = (p === hoverPoint || p === draggingPoint) ? 3 : 1.5;
+        ctx.strokeStyle = '#000000aa'; ctx.stroke();
+      }
+    }
+
+    function collectSplits(tree, xMin, xMax, yMin, yMax, segs) {
+      if (!tree || tree.leaf) return;
+      if (tree.feature === 'x') {
+        segs.push({ type: 'v', x: tree.threshold, y1: yMin, y2: yMax });
+        collectSplits(tree.left,  xMin, tree.threshold, yMin, yMax, segs);
+        collectSplits(tree.right, tree.threshold, xMax, yMin, yMax, segs);
+      } else {
+        segs.push({ type: 'h', y: tree.threshold, x1: xMin, x2: xMax });
+        collectSplits(tree.left,  xMin, xMax, yMin, tree.threshold, segs);
+        collectSplits(tree.right, xMin, xMax, tree.threshold, yMax, segs);
+      }
+    }
+
+    function drawDecisionMap(tree) {
+      if (!mapToggle.checked || points.length === 0 || !tree) return;
+      const step = 3; // fine grid
+      const tint = { red:'#f8c9c4', blue:'#c9def4', green:'#cfeee0' };
+      ctx.save(); ctx.globalAlpha = 0.9;
+      for (let py = 0; py < height; py += step) {
+        for (let px = 0; px < width; px += step) {
+          const [x, y] = pixelToData(px + step/2, py + step/2);
+          const lab = predictTree(tree, x, y);
+          if (!lab) continue;
+          ctx.fillStyle = tint[lab];
+          ctx.fillRect(px, py, step, step);
+        }
+      }
+      ctx.restore();
+    }
+
+    function drawSplits(tree) {
+      if (!splitsToggle.checked || points.length === 0 || !tree) return;
+      const segs = [];
+      collectSplits(tree, -1, 1, -1, 1, segs);
+      ctx.save();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#555';
+      ctx.setLineDash([6,4]);
+      for (const s of segs) {
+        ctx.beginPath();
+        if (s.type === 'v') {
+          const [px1, py1] = dataToPixel(s.x, s.y1);
+          const [px2, py2] = dataToPixel(s.x, s.y2);
+          ctx.moveTo(px1, py1); ctx.lineTo(px2, py2);
+        } else {
+          const [px1, py1] = dataToPixel(s.x1, s.y);
+          const [px2, py2] = dataToPixel(s.x2, s.y);
+          ctx.moveTo(px1, py1); ctx.lineTo(px2, py2);
+        }
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
+    // ===== Master draw =====
+    function draw() {
+      ctx.clearRect(0, 0, width, height);
+
+      // Build tree each frame (fast for this dataset size)
+      let tree = null;
+      if (points.length > 0) {
+        const maxDepth = parseInt(depthRange.value, 10);
+        const minLeaf  = parseInt(minLeafRange.value, 10);
+        tree = buildTree(points, 0, maxDepth, minLeaf);
+      }
+
+      drawDecisionMap(tree);
+      drawAxes();
+      drawPoints();
+      drawSplits(tree);
+      drawTreeDiagram(tree);
+
+      const reds   = points.filter(p => p.label === 'red').length;
+      const blues  = points.filter(p => p.label === 'blue').length;
+      const greens = points.filter(p => p.label === 'green').length;
+      info.innerHTML = `Red: ${reds}, Blue: ${blues}, Green: ${greens}`;
+    }
+
+    // Initial paint
+    draw();
+  </script>
+</body>
+</html>
