@@ -30,8 +30,9 @@
   </style>
 </head>
 <body>
-  <h1>Decision Tree – Multiclass (3 classes)</h1>
-  <p>Click to add points. Drag to move (even outside canvas). Ctrl-click to delete. Toggle decision map and split lines. The tree diagram updates live.</p>
+  <h1>Decision Tree – Classification</h1>
+  <p>Click to add points. Drag to move. Ctrl-click to delete.<br/>
+  Hover over a node in the tree to highlight its region in the data canvas.</p>
 
   <!-- Side-by-side visualization -->
   <div id="viz">
@@ -96,6 +97,11 @@
     let draggingPoint = null, hoverPoint = null;
     const radiusPx = 7;
 
+    // For node-hover linking
+    let hoveredTreeNode = null;
+    const TREE_BOX_W = 80, TREE_BOX_H = 38; // must match drawing values
+    let treeNodeBoxes = []; // [{node, x, y, w, h}] in treeCanvas pixels
+
     // Defaults: checkboxes OFF, slider labels set
     mapToggle.checked = false;
     splitsToggle.checked = false;
@@ -106,7 +112,7 @@
     function dataToPixel(x, y) { return [(x + 1) / 2 * width, (1 - (y + 1) / 2) * height]; }
     function pixelToData(px, py) { return [px / width * 2 - 1, 1 - py / height * 2]; }
 
-    // ===== Hit detection =====
+    // ===== Hit detection on data points =====
     function getPointAtPixel(px, py) {
       for (const p of points) {
         const [cx, cy] = dataToPixel(p.x, p.y);
@@ -118,8 +124,22 @@
 
     // ===== Mouse interactions (drag persists outside canvas) =====
     window.addEventListener('mousemove', (e) => {
-      const r = dataCanvas.getBoundingClientRect();
-      const x = e.clientX - r.left, y = e.clientY - r.top;
+      // If mouse is over the tree canvas, do tree hover; otherwise, do data hover/drag
+      const rd = dataCanvas.getBoundingClientRect();
+      const rt = treeCanvas.getBoundingClientRect();
+      const mx = e.clientX, my = e.clientY;
+
+      // Over tree canvas?
+      if (mx >= rt.left && mx <= rt.right && my >= rt.top && my <= rt.bottom) {
+        const tx = mx - rt.left, ty = my - rt.top;
+        hoveredTreeNode = getTreeNodeAt(tx, ty);
+        treeCanvas.style.cursor = hoveredTreeNode ? 'pointer' : 'default';
+        draw();
+        return;
+      }
+
+      // Over data canvas?
+      const x = mx - rd.left, y = my - rd.top;
       if (draggingPoint) {
         const [dx, dy] = pixelToData(x, y);
         draggingPoint.x = Math.max(-1, Math.min(1, dx));
@@ -136,6 +156,11 @@
         }
         draw();
       }
+    });
+
+    window.addEventListener('mouseleave', () => {
+      hoveredTreeNode = null;
+      draw();
     });
 
     window.addEventListener('mouseup', () => {
@@ -197,7 +222,7 @@
       const currentCounts = countsOf(data);
       const currentGini = gini(currentCounts);
 
-      // Stop if pure, depth limit reached, or not enough samples to split
+      // Stop if pure, depth limit reached, or not enough samples to split further
       if (currentGini === 0 || depth >= maxDepth || data.length < 2*minLeaf) {
         return { leaf: true, label: majorityLabel(data), counts: currentCounts };
       }
@@ -229,7 +254,6 @@
         }
       }
 
-      // Require a *meaningful* improvement; small eps handles tiny rounding errors
       if (!(bestLeft && bestRight) || bestGain <= 1e-12) {
         return { leaf: true, label: majorityLabel(data), counts: currentCounts };
       }
@@ -269,9 +293,23 @@
       ctx.closePath();
     }
 
-    // ===== Edge-safe layout (no overflow) =====
+    // Attach region rectangles (in data space) to every node
+    function assignRegions(node, xMin, xMax, yMin, yMax) {
+      if (!node) return;
+      node.region = { xMin, xMax, yMin, yMax };
+      if (node.leaf) return;
+      if (node.feature === 'x') {
+        assignRegions(node.left,  xMin, Math.min(xMax, node.threshold), yMin, yMax);
+        assignRegions(node.right, Math.max(xMin, node.threshold), xMax, yMin, yMax);
+      } else {
+        assignRegions(node.left,  xMin, xMax, yMin, Math.min(yMax, node.threshold));
+        assignRegions(node.right, xMin, xMax, Math.max(yMin, node.threshold), yMax);
+      }
+    }
+
+    // ===== Edge-safe layout (no overflow) & node box collection =====
     function layoutTree(node, depth, state) {
-      // state: { leafIndex, leafCount, marginX, marginY, vSpacing, centerMin, centerMax }
+      // state: { leafIndex, leafCount, marginX, marginY, vSpacing, centerMin, centerMax, boxes }
       if (!node) return;
 
       const ty = state.marginY + depth * state.vSpacing;
@@ -284,6 +322,8 @@
           : (state.centerMin + state.centerMax) / 2;
         tx = Math.max(state.centerMin, Math.min(state.centerMax, tx));
         node.tx = tx; node.ty = ty;
+        // collect box bounds for hit testing
+        state.boxes.push({ node, x: tx - TREE_BOX_W/2, y: ty - TREE_BOX_H/2, w: TREE_BOX_W, h: TREE_BOX_H });
         state.leafIndex += 1;
       } else {
         layoutTree(node.left,  depth + 1, state);
@@ -291,11 +331,21 @@
         let tx = (node.left.tx + node.right.tx) / 2;
         tx = Math.max(state.centerMin, Math.min(state.centerMax, tx));
         node.tx = tx; node.ty = ty;
+        state.boxes.push({ node, x: tx - TREE_BOX_W/2, y: ty - TREE_BOX_H/2, w: TREE_BOX_W, h: TREE_BOX_H });
       }
+    }
+
+    function getTreeNodeAt(px, py) {
+      for (let i = treeNodeBoxes.length - 1; i >= 0; i--) { // topmost first
+        const b = treeNodeBoxes[i];
+        if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) return b.node;
+      }
+      return null;
     }
 
     function drawTreeDiagram(tree) {
       tctx.clearRect(0, 0, treeCanvas.width, treeCanvas.height);
+      treeNodeBoxes = [];
 
       if (!tree) {
         tctx.save();
@@ -309,26 +359,23 @@
       const W = treeCanvas.width, H = treeCanvas.height;
       const marginX = 24, marginY = 24;
 
-      // Final node box size per your request
-      const boxW = 80, boxH = 38;
+      // Node box size
+      const boxW = TREE_BOX_W, boxH = TREE_BOX_H;
 
-      // Slightly tighter vertical spacing
+      // Vertical spacing
       const vSpacing = Math.max(65, (H - 2*marginY) / 6);
 
       // SAFE band for node centers (keeps boxes inside canvas)
       const centerMin = marginX + boxW / 2;
       const centerMax = W - marginX - boxW / 2;
 
-      // Layout
+      // Layout + collect boxes
       const leaves = Math.max(1, countLeaves(tree));
       const state = {
         leafIndex: 0,
         leafCount: leaves,
-        marginX,
-        marginY,
-        vSpacing,
-        centerMin,
-        centerMax
+        marginX, marginY, vSpacing, centerMin, centerMax,
+        boxes: treeNodeBoxes
       };
       layoutTree(tree, 0, state);
 
@@ -357,8 +404,8 @@
         if (!n) return;
 
         drawRoundRect(tctx, n.tx - boxW/2, n.ty - boxH/2, boxW, boxH, 8);
-        tctx.strokeStyle = '#333';
-        tctx.lineWidth = 1.5;
+        tctx.strokeStyle = (hoveredTreeNode === n) ? '#111' : '#333';
+        tctx.lineWidth = (hoveredTreeNode === n) ? 2 : 1.5;
         tctx.fillStyle = '#fff';
         tctx.fill();
         tctx.stroke();
@@ -374,9 +421,8 @@
             n.label === 'blue'  ? '#3498db' :
                                   '#2ecc71';
 
-          // Your preferred offsets for smaller boxes
           tctx.fillStyle = '#111';
-          tctx.fillText('Leaf →', n.tx - 16, n.ty - 8);
+          tctx.fillText('Leaf →', n.tx - 16, n.ty - 8);  // your chosen offsets
           tctx.fillStyle = labelColor;
           tctx.fillText(n.label, n.tx + 22, n.ty - 8);
 
@@ -475,20 +521,43 @@
       ctx.restore();
     }
 
+    // Highlight a node's region on the data canvas (if any)
+    function drawHoveredRegion(node) {
+      if (!node || !node.region) return;
+      const { xMin, xMax, yMin, yMax } = node.region;
+      const [px1, py1] = dataToPixel(xMin, yMax);
+      const [px2, py2] = dataToPixel(xMax, yMin);
+      ctx.save();
+      ctx.globalAlpha = 0.16;
+      ctx.fillStyle = '#f1c40f'; // soft yellow
+      ctx.fillRect(px1, py1, px2 - px1, py2 - py1);
+      ctx.globalAlpha = 0.9;
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#c8a60a';
+      ctx.strokeRect(px1, py1, px2 - px1, py2 - py1);
+      ctx.restore();
+    }
+
     // ===== Master draw =====
     function draw() {
       ctx.clearRect(0, 0, width, height);
 
-      // Build tree each frame (fast for this dataset size)
+      // Build tree each frame
       let tree = null;
       if (points.length > 0) {
         const maxDepth = parseInt(depthRange.value, 10);
         const minLeaf  = parseInt(minLeafRange.value, 10);
         tree = buildTree(points, 0, maxDepth, minLeaf);
+        // Attach regions for hover-highlight
+        assignRegions(tree, -1, 1, -1, 1);
       }
 
       drawDecisionMap(tree);
       drawAxes();
+
+      // Highlight hovered tree node's region BEFORE points so points are visible on top
+      if (hoveredTreeNode) drawHoveredRegion(hoveredTreeNode);
+
       drawPoints();
       drawSplits(tree);
       drawTreeDiagram(tree);
