@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Logistic Regression – Binary Classification</title>
+  <title>Linear SVM – Binary Classification</title>
   <style>
     body {
       font-family: sans-serif;
@@ -74,7 +74,7 @@
   </style>
 </head>
 <body>
-  <h1>Logistic Regression – Binary Classification</h1>
+  <h1>Linear SVM – Binary Classification</h1>
   <p>
     Click to add points. Drag to move. <br/>
     Shift-click on a point to flip its class. Ctrl-click to delete.
@@ -95,7 +95,7 @@
       <label>
         <span class="colorDot" style="background:#e74c3c;"></span>
         <input type="radio" name="classSel" value="red" checked />
-        Class +1 (red)
+        Class 1 (red)
       </label>
     </div>
 
@@ -105,29 +105,28 @@
         Show decision boundary
       </label>
       <label>
-        <input type="checkbox" id="probToggle" />
-        Show probability map
+        <input type="checkbox" id="marginToggle" />
+        Show margin map
       </label>
     </div>
 
     <div class="control-row">
       <label id="lambdaLabel" for="lambdaSlider">
         λ:
-        <input type="range" id="lambdaSlider" min="-6" max="2" step="0.1" value="-4" />
-        <span id="lambdaVal">1.0e-4</span>
+        <input type="range" id="lambdaSlider" min="-6" max="2" step="0.1" value="-2" />
+        <span id="lambdaVal">1.0e-2</span>
       </label>
     </div>
   </div>
 
   <div id="info"></div>
-  <div id="gradInfo"></div>
 
   <script>
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     const resetBtn = document.getElementById('resetBtn');
     const boundaryToggle = document.getElementById('boundaryToggle');
-    const probToggle = document.getElementById('probToggle');
+    const marginToggle = document.getElementById('marginToggle');
     const info = document.getElementById('info');
     const gradInfo = document.getElementById('gradInfo');
     const classInputs = Array.from(document.querySelectorAll('input[name="classSel"]'));
@@ -139,18 +138,20 @@
     const width = canvas.width;
     const height = canvas.height;
 
-    const points = []; // {x, y, label: 0/1}
+    const points = []; // {x, y, label: +1 or -1}
     const radiusPx = 7;
 
     let draggingPoint = null;
     let hoverPoint = null;
 
-    // Logistic regression parameters: w0 + w1*x + w2*y
+    // SVM parameters: w0 (bias b), w1, w2
     let weights = null; // {w0, w1, w2}
     let lastLoss = null;
     let lastAcc = null;
     let lastLambda = 0;
-    let lastGrad = null; // [g0, g1, g2]
+    let lastGrad = null;     // [g0, g1, g2]
+    let lastIterCount = 0;
+    let lastGradNorm = null;
 
     // Coordinate transforms
     function dataToPixel(x, y) {
@@ -220,7 +221,7 @@
 
       if (hit && shiftKey) {
         // flip class
-        hit.label = hit.label === 1 ? 0 : 1;
+        hit.label = -hit.label;
         fitModel();
         draw();
         return;
@@ -235,7 +236,7 @@
         // add new point
         const [x, y] = pixelToData(offsetX, offsetY);
         const clsVal = classInputs.find(i => i.checked).value;
-        const label = clsVal === 'red' ? 1 : 0; // 1 for +1 (red), 0 for -1 (blue)
+        const label = clsVal === 'red' ? 1 : -1;
         points.push({ x, y, label });
       }
 
@@ -250,6 +251,8 @@
       lastAcc = null;
       lastLambda = 0;
       lastGrad = null;
+      lastIterCount = 0;
+      lastGradNorm = null;
       ctx.clearRect(0, 0, width, height);
       info.textContent = '';
       gradInfo.textContent = '';
@@ -257,10 +260,10 @@
     });
 
     boundaryToggle.addEventListener('change', draw);
-    probToggle.addEventListener('change', draw);
+    marginToggle.addEventListener('change', draw);
     classInputs.forEach(el => el.addEventListener('change', draw));
 
-    // Regularization controls (always on)
+    // Regularization controls – always enabled now
     function currentLambda() {
       const exp = parseFloat(lambdaSlider.value);
       return Math.pow(10, exp);
@@ -281,29 +284,42 @@
     // init λ display
     updateLambdaLabel();
 
-    // --- Logistic regression pieces (with Newton) ---
-    function sigmoid(z) {
-      if (z > 20) return 1;
-      if (z < -20) return 0;
-      return 1 / (1 + Math.exp(-z));
-    }
+    // --- Smoothed (Huber) hinge SVM loss + grad + Hessian ---
+    // margin m = y * (w1 x + w2 y + b)
+    // Let h = 1 - m, δ > 0
+    // if m >= 1            => loss = 0
+    // else if m <= 1 - δ   => loss = 1 - m - δ/2   (linear)
+    // else                 => loss = h^2 / (2δ)    (quadratic)
+    const HUBER_DELTA = 0.5;
 
-    // Loss only (for line search): average CE + 0.5 * λ (w1^2 + w2^2)
     function computeLoss(w0, w1, w2, lam) {
       if (points.length === 0) return 0;
       let loss = 0;
+      const delta = HUBER_DELTA;
+
       for (const p of points) {
+        const yi = p.label;
         const z = w0 + w1 * p.x + w2 * p.y;
-        const yhat = sigmoid(z);
-        const y = p.label;
-        loss += -(y * Math.log(yhat + 1e-12) + (1 - y) * Math.log(1 - yhat + 1e-12));
+        const m = yi * z;
+        const h = 1 - m;
+
+        if (h <= 0) {
+          // margin >= 1 -> no loss
+          continue;
+        } else if (h >= delta) {
+          // linear region: 1 - m - δ/2 = h - δ/2
+          loss += (h - delta / 2);
+        } else {
+          // quadratic region: h^2 / (2δ)
+          loss += (h * h) / (2 * delta);
+        }
       }
+
       const baseLoss = loss / points.length;
       const regTerm = 0.5 * lam * (w1 * w1 + w2 * w2);
       return baseLoss + regTerm;
     }
 
-    // Loss, gradient, Hessian at (w0, w1, w2)
     function computeLossGradHess(w0, w1, w2, lam) {
       const n = points.length;
       if (n === 0) {
@@ -316,65 +332,86 @@
 
       let loss = 0;
       let g0 = 0, g1 = 0, g2 = 0;
-
-      // Hessian entries
       let H = [
         [0, 0, 0],
         [0, 0, 0],
         [0, 0, 0]
       ];
 
+      const delta = HUBER_DELTA;
+
       for (const p of points) {
+        const yi = p.label; // ±1
         const x0 = 1;
         const x1 = p.x;
         const x2 = p.y;
 
         const z = w0 + w1 * x1 + w2 * x2;
-        const yhat = sigmoid(z);
-        const y = p.label;
+        const m = yi * z;
+        const h = 1 - m; // > 0 if inside loss
 
-        // loss
-        loss += -(y * Math.log(yhat + 1e-12) + (1 - y) * Math.log(1 - yhat + 1e-12));
+        if (h <= 0) {
+          // margin >= 1: no contribution
+          continue;
+        }
 
-        // gradient contribution
-        const err = yhat - y;
-        g0 += err * x0;
-        g1 += err * x1;
-        g2 += err * x2;
+        if (h >= delta) {
+          // linear region
+          // loss = h - δ/2
+          loss += (h - delta / 2);
 
-        // Hessian contribution
-        const s = yhat * (1 - yhat);
-        H[0][0] += s * x0 * x0;
-        H[0][1] += s * x0 * x1;
-        H[0][2] += s * x0 * x2;
-        H[1][0] += s * x1 * x0;
-        H[1][1] += s * x1 * x1;
-        H[1][2] += s * x1 * x2;
-        H[2][0] += s * x2 * x0;
-        H[2][1] += s * x2 * x1;
-        H[2][2] += s * x2 * x2;
+          // gradient of h wrt θ is -y x
+          const scale = -yi;
+          g0 += scale * x0;
+          g1 += scale * x1;
+          g2 += scale * x2;
+
+          // Hessian = 0 in linear region
+        } else {
+          // quadratic region
+          // loss = h^2 / (2δ)
+          loss += (h * h) / (2 * delta);
+
+          // grad: (h/δ)*d h = (h/δ) * (-y x) = -(h/δ) y x
+          const scale = -(h / delta) * yi;
+          g0 += scale * x0;
+          g1 += scale * x1;
+          g2 += scale * x2;
+
+          // Hessian: (1/δ) x x^T (since y^2 = 1)
+          const c = 1 / delta;
+          H[0][0] += c * x0 * x0;
+          H[0][1] += c * x0 * x1;
+          H[0][2] += c * x0 * x2;
+          H[1][0] += c * x1 * x0;
+          H[1][1] += c * x1 * x1;
+          H[1][2] += c * x1 * x2;
+          H[2][0] += c * x2 * x0;
+          H[2][1] += c * x2 * x1;
+          H[2][2] += c * x2 * x2;
+        }
       }
 
       const baseLoss = loss / n;
-      // Average gradient
+
+      // average gradient
       g0 /= n;
       g1 /= n;
       g2 /= n;
 
-      // Average Hessian
+      // average Hessian
       for (let i = 0; i < 3; i++) {
         for (let j = 0; j < 3; j++) {
           H[i][j] /= n;
         }
       }
 
-      // L2 regularization (not on bias)
+      // L2 regularization on w1, w2 (not on bias)
       g1 += lam * w1;
       g2 += lam * w2;
       H[1][1] += lam;
       H[2][2] += lam;
 
-      // tiny jitter on diagonal for numerical stability
       const eps = 1e-6;
       H[0][0] += eps;
       H[1][1] += eps;
@@ -385,14 +422,12 @@
 
       return {
         loss: totalLoss,
-        baseLoss,
-        regTerm,
         grad: [g0, g1, g2],
         H
       };
     }
 
-    // Solve 3x3 linear system A * x = b via Gaussian elimination
+    // Solve 3x3 linear system A x = b (Gaussian elimination)
     function solve3x3(A, b) {
       const M = [
         [A[0][0], A[0][1], A[0][2], b[0]],
@@ -412,7 +447,6 @@
         if (Math.abs(M[maxRow][i]) < 1e-12) {
           return null; // singular
         }
-        // swap
         if (maxRow !== i) {
           const tmp = M[i];
           M[i] = M[maxRow];
@@ -447,23 +481,26 @@
         lastLoss = null;
         lastAcc = null;
         lastGrad = null;
+        lastIterCount = 0;
+        lastGradNorm = null;
         return;
       }
 
-      const has0 = points.some(p => p.label === 0);
-      const has1 = points.some(p => p.label === 1);
-      if (!has0 || !has1) {
+      const hasPos = points.some(p => p.label === 1);
+      const hasNeg = points.some(p => p.label === -1);
+      if (!hasPos || !hasNeg) {
         weights = null;
         lastLoss = null;
         lastAcc = null;
         lastGrad = null;
+        lastIterCount = 0;
+        lastGradNorm = null;
         return;
       }
 
       const lam = currentLambda();
       lastLambda = lam;
 
-      // Use previous solution as initialization if available
       let w0 = 0, w1 = 0, w2 = 0;
       if (weights) {
         w0 = weights.w0;
@@ -472,23 +509,27 @@
       }
 
       const maxIter = 40;
-      const gradTol = 1e-8;
+      const gradTol = 1e-6;
       const stepTol = 1e-10;
       let lossRes = computeLossGradHess(w0, w1, w2, lam);
+
+      lastIterCount = 0;
+      lastGradNorm = null;
 
       for (let iter = 0; iter < maxIter; iter++) {
         const g = lossRes.grad;
         const H = lossRes.H;
 
         const gNorm = Math.sqrt(g[0]*g[0] + g[1]*g[1] + g[2]*g[2]);
+        lastGradNorm = gNorm;
+        lastIterCount = iter + 1;
+
         if (gNorm < gradTol) {
           break;
         }
 
-        // Newton direction: H * d = g  => step = -d
         const d = solve3x3(H, g);
         if (!d) {
-          // Hessian singular; stop
           break;
         }
 
@@ -497,9 +538,9 @@
           break;
         }
 
-        // Backtracking line search
         const origLoss = lossRes.loss;
-        const gTd = g[0]*d[0] + g[1]*d[1] + g[2]*d[2]; // > 0 for convex
+        const gTd = g[0]*d[0] + g[1]*d[1] + g[2]*d[2]; // >0 for convex
+
         let alpha = 1.0;
         const beta = 0.5;
         const c = 1e-4;
@@ -512,7 +553,7 @@
           newLoss = computeLoss(w0t, w1t, w2t, lam);
 
           if (newLoss <= origLoss - c * alpha * gTd || alpha < 1e-6) {
-            break; // Armijo condition
+            break;
           }
           alpha *= beta;
         }
@@ -521,12 +562,11 @@
           break;
         }
 
-        // Update parameters
+        // update
         w0 = w0 - alpha * d[0];
         w1 = w1 - alpha * d[1];
         w2 = w2 - alpha * d[2];
 
-        // Recompute loss/grad/H for next iteration
         lossRes = computeLossGradHess(w0, w1, w2, lam);
       }
 
@@ -534,12 +574,11 @@
       lastLoss = lossRes.loss;
       lastGrad = lossRes.grad.slice();
 
-      // compute accuracy
+      // accuracy
       let correct = 0;
       for (const p of points) {
         const z = w0 + w1 * p.x + w2 * p.y;
-        const yhat = sigmoid(z);
-        const pred = yhat >= 0.5 ? 1 : 0;
+        const pred = z >= 0 ? 1 : -1;
         if (pred === p.label) correct++;
       }
       lastAcc = correct / points.length;
@@ -562,16 +601,36 @@
     }
 
     function drawPoints() {
+      if (!weights) {
+        for (const p of points) {
+          const [px, py] = dataToPixel(p.x, p.y);
+          ctx.beginPath();
+          ctx.arc(px, py, radiusPx, 0, 2 * Math.PI);
+          ctx.fillStyle = (p.label === 1) ? '#e74c3c' : '#3498db';
+          ctx.fill();
+          ctx.lineWidth = (p === hoverPoint || p === draggingPoint) ? 3 : 1.5;
+          ctx.strokeStyle = '#000000aa';
+          ctx.stroke();
+        }
+        return;
+      }
+
+      const { w0, w1, w2 } = weights;
+
       for (const p of points) {
         const [px, py] = dataToPixel(p.x, p.y);
+        const yi = p.label;
+        const margin = yi * (w0 + w1 * p.x + w2 * p.y);
+
         ctx.beginPath();
         ctx.arc(px, py, radiusPx, 0, 2 * Math.PI);
 
         ctx.fillStyle = (p.label === 1) ? '#e74c3c' : '#3498db';
-
         ctx.fill();
-        ctx.lineWidth = (p === hoverPoint || p === draggingPoint) ? 3 : 1.5;
-        ctx.strokeStyle = '#000000aa';
+
+        const isSupport = (margin <= 1 + 1e-3);
+        ctx.lineWidth = (p === hoverPoint || p === draggingPoint || isSupport) ? 3 : 1.5;
+        ctx.strokeStyle = isSupport ? '#000000' : '#000000aa';
         ctx.stroke();
       }
     }
@@ -579,83 +638,95 @@
     function drawDecisionBoundary() {
       if (!weights || !boundaryToggle.checked) return;
 
-      let { w0, w1, w2 } = weights;
+      const { w0, w1, w2 } = weights;
+      const normW = Math.sqrt(w1 * w1 + w2 * w2);
+      if (normW < 1e-6) return;
 
-      let pts = [];
-      if (Math.abs(w2) > 1e-6) {
-        const candidates = [];
+      function drawLevel(c, style, width) {
+        const bEff = w0 - c;  // w1 x + w2 y + bEff = 0  ⇔  w1 x + w2 y + w0 = c
+        let pts = [];
 
-        // x = -1
-        let x = -1;
-        let y = -(w0 + w1 * x) / w2;
-        candidates.push([x, y]);
+        if (Math.abs(w2) > 1e-6) {
+          const candidates = [];
 
-        // x = 1
-        x = 1;
-        y = -(w0 + w1 * x) / w2;
-        candidates.push([x, y]);
+          // x = -1
+          let x = -1;
+          let y = -(bEff + w1 * x) / w2;
+          candidates.push([x, y]);
 
-        // y = -1
-        let yFix = -1;
-        if (Math.abs(w1) > 1e-6) {
-          let x2 = -(w0 + w2 * yFix) / w1;
-          candidates.push([x2, yFix]);
-        }
+          // x = 1
+          x = 1;
+          y = -(bEff + w1 * x) / w2;
+          candidates.push([x, y]);
 
-        // y = 1
-        yFix = 1;
-        if (Math.abs(w1) > 1e-6) {
-          let x2 = -(w0 + w2 * yFix) / w1;
-          candidates.push([x2, yFix]);
-        }
+          // y = -1
+          let yFix = -1;
+          if (Math.abs(w1) > 1e-6) {
+            let x2 = -(bEff + w2 * yFix) / w1;
+            candidates.push([x2, yFix]);
+          }
 
-        pts = candidates.filter(([xx, yy]) =>
-          xx >= -1 && xx <= 1 && yy >= -1 && yy <= 1
-        );
+          // y = 1
+          yFix = 1;
+          if (Math.abs(w1) > 1e-6) {
+            let x2 = -(bEff + w2 * yFix) / w1;
+            candidates.push([x2, yFix]);
+          }
 
-        if (pts.length < 2) return;
+          pts = candidates.filter(([xx, yy]) =>
+            xx >= -1 && xx <= 1 && yy >= -1 && yy <= 1
+          );
 
-        let bestI = 0, bestJ = 1, bestD = -1;
-        for (let i = 0; i < pts.length; i++) {
-          for (let j = i + 1; j < pts.length; j++) {
-            const dx = pts[i][0] - pts[j][0];
-            const dy = pts[i][1] - pts[j][1];
-            const d = dx * dx + dy * dy;
-            if (d > bestD) {
-              bestD = d;
-              bestI = i;
-              bestJ = j;
+          if (pts.length < 2) return;
+
+          let bestI = 0, bestJ = 1, bestD = -1;
+          for (let i = 0; i < pts.length; i++) {
+            for (let j = i + 1; j < pts.length; j++) {
+              const dx = pts[i][0] - pts[j][0];
+              const dy = pts[i][1] - pts[j][1];
+              const d = dx * dx + dy * dy;
+              if (d > bestD) {
+                bestD = d;
+                bestI = i;
+                bestJ = j;
+              }
             }
           }
+
+          const [x1, y1] = pts[bestI];
+          const [x2, y2] = pts[bestJ];
+          const [p1x, p1y] = dataToPixel(x1, y1);
+          const [p2x, p2y] = dataToPixel(x2, y2);
+
+          ctx.beginPath();
+          ctx.moveTo(p1x, p1y);
+          ctx.lineTo(p2x, p2y);
+        } else if (Math.abs(w1) > 1e-6) {
+          const x = -bEff / w1;
+          if (x < -1 || x > 1) return;
+          const [p1x, p1y] = dataToPixel(x, -1);
+          const [p2x, p2y] = dataToPixel(x, 1);
+          ctx.beginPath();
+          ctx.moveTo(p1x, p1y);
+          ctx.lineTo(p2x, p2y);
+        } else {
+          return;
         }
 
-        const [x1, y1] = pts[bestI];
-        const [x2, y2] = pts[bestJ];
-        const [p1x, p1y] = dataToPixel(x1, y1);
-        const [p2x, p2y] = dataToPixel(x2, y2);
-
-        ctx.beginPath();
-        ctx.moveTo(p1x, p1y);
-        ctx.lineTo(p2x, p2y);
-      } else if (Math.abs(w1) > 1e-6) {
-        const x = -w0 / w1;
-        if (x < -1 || x > 1) return;
-        const [p1x, p1y] = dataToPixel(x, -1);
-        const [p2x, p2y] = dataToPixel(x, 1);
-        ctx.beginPath();
-        ctx.moveTo(p1x, p1y);
-        ctx.lineTo(p2x, p2y);
-      } else {
-        return;
+        ctx.strokeStyle = style;
+        ctx.lineWidth = width;
+        ctx.stroke();
       }
 
-      ctx.strokeStyle = 'black';
-      ctx.lineWidth = 3;
-      ctx.stroke();
+      // main decision boundary (w·x + b = 0)
+      drawLevel(0, 'black', 3);
+      // margin lines (w·x + b = ±1)
+      drawLevel(1, '#777', 1.5);
+      drawLevel(-1, '#777', 1.5);
     }
 
-    function drawProbMap() {
-      if (!weights || !probToggle.checked) return;
+    function drawMarginMap() {
+      if (!weights || !marginToggle.checked) return;
 
       const { w0, w1, w2 } = weights;
       const step = 4;
@@ -666,12 +737,11 @@
       for (let py = 0; py < height; py += step) {
         for (let px = 0; px < width; px += step) {
           const [x, y] = pixelToData(px + step / 2, py + step / 2);
-          const z = w0 + w1 * x + w2 * y;
-          const p = sigmoid(z);
+          const z = w0 + w1 * x + w2 * y; // decision function
 
-          const conf = Math.abs(p - 0.5) * 2; // 0..1
+          const conf = Math.min(1, Math.abs(z));
           let color;
-          if (p >= 0.5) {
+          if (z >= 0) {
             color = `rgba(231, 76, 60, ${0.08 + 0.25 * conf})`;
           } else {
             color = `rgba(52, 152, 219, ${0.08 + 0.25 * conf})`;
@@ -687,23 +757,26 @@
 
     function draw() {
       ctx.clearRect(0, 0, width, height);
-      drawProbMap();
+      drawMarginMap();
       drawAxes();
       drawPoints();
       drawDecisionBoundary();
 
       const reds = points.filter(p => p.label === 1).length;
-      const blues = points.filter(p => p.label === 0).length;
+      const blues = points.filter(p => p.label === -1).length;
 
-      // Output: first -1 (blue), then +1 (red); no loss, no λ, no gradient
-      let text = `Class -1 (blue): ${blues}, Class +1 (red): ${reds}`;
-      if (weights && lastAcc != null) {
-        text += ` | Training accuracy: ${(lastAcc * 100).toFixed(1)}%`;
-      }
+      let text = `Class -1 (blue): ${blues}, Class 1 (red): ${reds}`;
       info.textContent = text;
 
-      // gradient output removed
-      gradInfo.textContent = '';
+      if (weights && lastGrad) {
+        const { w0, w1, w2 } = weights;
+        const [g0, g1, g2] = lastGrad;
+        gradInfo.textContent =
+          `(w, b) = (${w1.toFixed(3)}, ${w2.toFixed(3)}, ${w0.toFixed(3)})` +
+          ` | grad = (${g1.toExponential(2)}, ${g2.toExponential(2)}, ${g0.toExponential(2)})`;
+      } else {
+        gradInfo.textContent = '';
+      }
     }
 
     // initial draw
