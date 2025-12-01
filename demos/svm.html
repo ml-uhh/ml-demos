@@ -104,6 +104,12 @@
         <input type="checkbox" id="boundaryToggle" checked />
         Show decision boundary
       </label>
+
+      <label>
+        <input type="checkbox" id="violationsToggle" checked />
+        Show violation lines
+      </label>
+
       <label>
         <input type="checkbox" id="marginToggle" />
         Show margin map
@@ -120,6 +126,7 @@
   </div>
 
   <div id="info"></div>
+  <div id="gradInfo"></div>
 
   <script>
     const canvas = document.getElementById('canvas');
@@ -127,6 +134,7 @@
     const resetBtn = document.getElementById('resetBtn');
     const boundaryToggle = document.getElementById('boundaryToggle');
     const marginToggle = document.getElementById('marginToggle');
+    const violationsToggle = document.getElementById('violationsToggle');
     const info = document.getElementById('info');
     const gradInfo = document.getElementById('gradInfo');
     const classInputs = Array.from(document.querySelectorAll('input[name="classSel"]'));
@@ -261,6 +269,7 @@
 
     boundaryToggle.addEventListener('change', draw);
     marginToggle.addEventListener('change', draw);
+    violationsToggle.addEventListener('change', draw);
     classInputs.forEach(el => el.addEventListener('change', draw));
 
     // Regularization controls – always enabled now
@@ -285,11 +294,6 @@
     updateLambdaLabel();
 
     // --- Smoothed (Huber) hinge SVM loss + grad + Hessian ---
-    // margin m = y * (w1 x + w2 y + b)
-    // Let h = 1 - m, δ > 0
-    // if m >= 1            => loss = 0
-    // else if m <= 1 - δ   => loss = 1 - m - δ/2   (linear)
-    // else                 => loss = h^2 / (2δ)    (quadratic)
     const HUBER_DELTA = 0.5;
 
     function computeLoss(w0, w1, w2, lam) {
@@ -304,13 +308,10 @@
         const h = 1 - m;
 
         if (h <= 0) {
-          // margin >= 1 -> no loss
           continue;
         } else if (h >= delta) {
-          // linear region: 1 - m - δ/2 = h - δ/2
           loss += (h - delta / 2);
         } else {
-          // quadratic region: h^2 / (2δ)
           loss += (h * h) / (2 * delta);
         }
       }
@@ -351,34 +352,27 @@
         const h = 1 - m; // > 0 if inside loss
 
         if (h <= 0) {
-          // margin >= 1: no contribution
           continue;
         }
 
         if (h >= delta) {
           // linear region
-          // loss = h - δ/2
           loss += (h - delta / 2);
 
-          // gradient of h wrt θ is -y x
           const scale = -yi;
           g0 += scale * x0;
           g1 += scale * x1;
           g2 += scale * x2;
 
-          // Hessian = 0 in linear region
         } else {
           // quadratic region
-          // loss = h^2 / (2δ)
           loss += (h * h) / (2 * delta);
 
-          // grad: (h/δ)*d h = (h/δ) * (-y x) = -(h/δ) y x
           const scale = -(h / delta) * yi;
           g0 += scale * x0;
           g1 += scale * x1;
           g2 += scale * x2;
 
-          // Hessian: (1/δ) x x^T (since y^2 = 1)
           const c = 1 / delta;
           H[0][0] += c * x0 * x0;
           H[0][1] += c * x0 * x1;
@@ -437,7 +431,6 @@
 
       const n = 3;
       for (let i = 0; i < n; i++) {
-        // pivot
         let maxRow = i;
         for (let k = i + 1; k < n; k++) {
           if (Math.abs(M[k][i]) > Math.abs(M[maxRow][i])) {
@@ -453,7 +446,6 @@
           M[maxRow] = tmp;
         }
 
-        // eliminate
         for (let k = i + 1; k < n; k++) {
           const factor = M[k][i] / M[i][i];
           for (let j = i; j <= n; j++) {
@@ -462,7 +454,6 @@
         }
       }
 
-      // back substitution
       const x = [0, 0, 0];
       for (let i = n - 1; i >= 0; i--) {
         let sum = M[i][n];
@@ -539,7 +530,7 @@
         }
 
         const origLoss = lossRes.loss;
-        const gTd = g[0]*d[0] + g[1]*d[1] + g[2]*d[2]; // >0 for convex
+        const gTd = g[0]*d[0] + g[1]*d[1] + g[2]*d[2];
 
         let alpha = 1.0;
         const beta = 0.5;
@@ -562,7 +553,6 @@
           break;
         }
 
-        // update
         w0 = w0 - alpha * d[0];
         w1 = w1 - alpha * d[1];
         w2 = w2 - alpha * d[2];
@@ -574,7 +564,6 @@
       lastLoss = lossRes.loss;
       lastGrad = lossRes.grad.slice();
 
-      // accuracy
       let correct = 0;
       for (const p of points) {
         const z = w0 + w1 * p.x + w2 * p.y;
@@ -643,30 +632,26 @@
       if (normW < 1e-6) return;
 
       function drawLevel(c, style, width) {
-        const bEff = w0 - c;  // w1 x + w2 y + bEff = 0  ⇔  w1 x + w2 y + w0 = c
+        const bEff = w0 - c;
         let pts = [];
 
         if (Math.abs(w2) > 1e-6) {
           const candidates = [];
 
-          // x = -1
           let x = -1;
           let y = -(bEff + w1 * x) / w2;
           candidates.push([x, y]);
 
-          // x = 1
           x = 1;
           y = -(bEff + w1 * x) / w2;
           candidates.push([x, y]);
 
-          // y = -1
           let yFix = -1;
           if (Math.abs(w1) > 1e-6) {
             let x2 = -(bEff + w2 * yFix) / w1;
             candidates.push([x2, yFix]);
           }
 
-          // y = 1
           yFix = 1;
           if (Math.abs(w1) > 1e-6) {
             let x2 = -(bEff + w2 * yFix) / w1;
@@ -718,11 +703,46 @@
         ctx.stroke();
       }
 
-      // main decision boundary (w·x + b = 0)
+      // main decision boundary and margins
       drawLevel(0, 'black', 3);
-      // margin lines (w·x + b = ±1)
       drawLevel(1, '#777', 1.5);
       drawLevel(-1, '#777', 1.5);
+    }
+
+    // draw dotted lines for margin-violating or misclassified points
+    function drawViolationLines() {
+      if (!weights || !violationsToggle.checked) return;
+
+      const { w0, w1, w2 } = weights;
+      const normSq = w1 * w1 + w2 * w2;
+      if (normSq < 1e-6) return;
+
+      for (const p of points) {
+        const f = w0 + w1 * p.x + w2 * p.y;   // decision value
+        const margin = p.label * f;           // y * f(x)
+
+        // only points inside the margin or misclassified: y f(x) < 1
+        if (margin >= 1 - 1e-3) continue;
+
+        // project onto the *class margin* hyperplane y (w·x + b) = 1
+        // alpha = (margin - 1) / ||w||^2, x_proj = x - alpha * y * w
+        const alpha = (margin - 1) / normSq;
+        const projX = p.x - alpha * p.label * w1;
+        const projY = p.y - alpha * p.label * w2;
+
+        const [px1, py1] = dataToPixel(p.x, p.y);
+        const [px2, py2] = dataToPixel(projX, projY);
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.setLineDash([5, 4]);
+        ctx.moveTo(px1, py1);
+        ctx.lineTo(px2, py2);
+        ctx.strokeStyle = '#00000099';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+      }
     }
 
     function drawMarginMap() {
@@ -737,7 +757,7 @@
       for (let py = 0; py < height; py += step) {
         for (let px = 0; px < width; px += step) {
           const [x, y] = pixelToData(px + step / 2, py + step / 2);
-          const z = w0 + w1 * x + w2 * y; // decision function
+          const z = w0 + w1 * x + w2 * y;
 
           const conf = Math.min(1, Math.abs(z));
           let color;
@@ -761,6 +781,7 @@
       drawAxes();
       drawPoints();
       drawDecisionBoundary();
+      drawViolationLines(); // dotted lines to the margin hyperplanes
 
       const reds = points.filter(p => p.label === 1).length;
       const blues = points.filter(p => p.label === -1).length;
@@ -772,8 +793,7 @@
         const { w0, w1, w2 } = weights;
         const [g0, g1, g2] = lastGrad;
         gradInfo.textContent =
-          `(w, b) = (${w1.toFixed(3)}, ${w2.toFixed(3)}, ${w0.toFixed(3)})` +
-          ` | grad = (${g1.toExponential(2)}, ${g2.toExponential(2)}, ${g0.toExponential(2)})`;
+          `(w, b) = (${w1.toFixed(3)}, ${w2.toFixed(3)}, ${w0.toFixed(3)})`;
       } else {
         gradInfo.textContent = '';
       }
