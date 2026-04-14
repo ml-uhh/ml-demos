@@ -1,0 +1,1035 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gradient Descent and Least Squares</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --panel: #fafafa;
+      --border: #d7d7d7;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --accent: #2563eb;
+      --accent2: #dc2626;
+      --good: #059669;
+      --warn: #d97706;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    .wrap {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 18px 18px 26px;
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 30px;
+      text-align: center;
+    }
+    .subtitle {
+      text-align: center;
+      color: var(--muted);
+      margin-bottom: 16px;
+      font-size: 15px;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 14px;
+    }
+    .bt-box {
+      display: flex;
+      gap: 6px;
+      padding: 4px 6px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      align-items: center;
+      transition: opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+    }
+    .inactive-box {
+      opacity: 0.45;
+      background: #f3f4f6;
+      border-color: #e5e7eb;
+    }
+    .inactive-box input,
+    .inactive-box select,
+    .inactive-box button,
+    .inactive-box label,
+    .inactive-box span {
+      pointer-events: none;
+    }
+    .controls-row-1 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 14px;
+      align-items: center;
+      width: 100%;
+      margin-bottom: 14px;
+    }
+    .controls-row-1 .group {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fff;
+      min-width: 0;
+    }
+    .controls .group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fff;
+    }
+    button {
+      border: 1px solid var(--border);
+      background: #fff;
+      border-radius: 9px;
+      padding: 9px 12px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button:hover { background: #f4f4f5; }
+    select {
+      border: 1px solid var(--border);
+      background: #fff;
+      border-radius: 9px;
+      padding: 8px 10px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    input[type="range"] { width: 120px; }
+    label { font-size: 14px; }
+    .dashboard {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 14px;
+    }
+    .panel {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 14px;
+      padding: 10px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .panel h2 {
+      margin: 2px 0 8px;
+      font-size: 18px;
+      text-align: center;
+    }
+    .panel p {
+      margin: 0 0 8px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--muted);
+      min-height: 18px;
+    }
+    canvas {
+      width: 100%;
+      height: auto;
+      display: block;
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .status {
+      margin-top: 14px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      background: #fff;
+      font-size: 15px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      justify-content: center;
+    }
+    .status .value { font-weight: 700; }
+    .hint {
+      margin-top: 12px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    @media (max-width: 1100px) {
+      .dashboard { grid-template-columns: 1fr; }
+      .controls-row-1 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Gradient Descent for Least Squares Regression</h1>
+    <div class="subtitle">
+      Left: data and regression line. Middle: loss contours in parameter space <i>(w,b)</i>. Right: loss surface.
+    </div>
+
+    <div class="controls-row-1">
+      <div class="group">
+        <button id="addSampleBtn">Add sample dataset</button>
+        <button id="clearBtn">Clear points</button>
+        <button id="fitBtn">Jump to optimum</button>
+      </div>
+      <div class="group">
+        <button id="stepBtn">Gradient step</button>
+        <button id="runBtn">Run gradient descent</button>
+        <button id="stopBtn">Stop</button>
+      </div>
+      <div class="group">
+        <label><input id="showResiduals" type="checkbox" checked /> residuals</label>
+        <label><input id="showPath" type="checkbox" checked /> optimization path</label>
+      </div>
+    </div>
+
+    <div class="dashboard">
+      <div class="panel">
+        <h2>Regression view</h2>
+        <p>Click to add points, drag points to move them.</p>
+        <canvas id="dataCanvas" width="430" height="430"></canvas>
+      </div>
+      <div class="panel">
+        <h2>Contour plot in parameter space</h2>
+        <p>Drag the blue point <i>(w,b)</i>.</p>
+        <canvas id="contourCanvas" width="430" height="430"></canvas>
+      </div>
+      <div class="panel">
+        <h2>Loss surface</h2>
+        <p>The red point shows the current loss on the surface.</p>
+        <canvas id="surfaceCanvas" width="430" height="430"></canvas>
+      </div>
+    </div>
+
+    <div class="controls" style="flex-wrap:wrap; justify-content:center; margin:14px 0;">
+      <div class="group" id="lrBox">
+        <label for="lrSlider">Learning rate</label>
+        <input id="lrSlider" type="range" min="0.02" max="1" step="0.02" value="0.3" />
+        <span id="lrValue">0.300</span>
+      </div>
+
+      <div class="bt-box" id="btBox">
+        <div class="group">
+          <label for="btInitSlider">BT init</label>
+          <input id="btInitSlider" type="range" min="0.02" max="1" step="0.02" value="1.00" />
+          <span id="btInitValue">1.00</span>
+        </div>
+        <div class="group">
+          <label for="btBetaSlider">BT shrink</label>
+          <input id="btBetaSlider" type="range" min="0.10" max="0.90" step="0.05" value="0.50" />
+          <span id="btBetaValue">0.50</span>
+        </div>
+        <div class="group">
+          <label for="btCSlider">BT Armijo</label>
+          <input id="btCSlider" type="range" min="0.0001" max="0.2000" step="0.0001" value="0.0001" />
+          <span id="btCValue">0.0001</span>
+        </div>
+      </div>
+
+      <div class="group">
+        <label for="stepMode">Step rule</label>
+        <select id="stepMode">
+          <option value="fixed" selected>Fixed step</option>
+          <option value="backtracking">Backtracking line search</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="status" id="status"></div>
+    <div class="hint">The loss is: \(L(w,b)=\frac{1}{2}\sum_{i=1}^n (w x^{(i)} + b - y^{(i)})^2\).</div>
+  </div>
+
+  <script>
+    const dataCanvas = document.getElementById('dataCanvas');
+    const contourCanvas = document.getElementById('contourCanvas');
+    const surfaceCanvas = document.getElementById('surfaceCanvas');
+    const dataCtx = dataCanvas.getContext('2d');
+    const contourCtx = contourCanvas.getContext('2d');
+    const surfaceCtx = surfaceCanvas.getContext('2d');
+
+    const addSampleBtn = document.getElementById('addSampleBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const fitBtn = document.getElementById('fitBtn');
+    const stepBtn = document.getElementById('stepBtn');
+    const runBtn = document.getElementById('runBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const lrSlider = document.getElementById('lrSlider');
+    const lrValue = document.getElementById('lrValue');
+    const stepMode = document.getElementById('stepMode');
+    const btInitSlider = document.getElementById('btInitSlider');
+    const btInitValue = document.getElementById('btInitValue');
+    const btBetaSlider = document.getElementById('btBetaSlider');
+    const btBetaValue = document.getElementById('btBetaValue');
+    const btCSlider = document.getElementById('btCSlider');
+    const btCValue = document.getElementById('btCValue');
+    const lrBox = document.getElementById('lrBox');
+    const btBox = document.getElementById('btBox');
+    const showResiduals = document.getElementById('showResiduals');
+    const showPath = document.getElementById('showPath');
+    const status = document.getElementById('status');
+
+    const DATA_RANGE = { xMin: -1, xMax: 1, yMin: -1, yMax: 1 };
+    const PARAM_RANGE = { wMin: -2.5, wMax: 2.5, bMin: -2.0, bMax: 2.0 };
+    const radiusPx = 7;
+    const DEFAULT_PARAMS = { w: -1.0, b: -0.6 };
+    const SAMPLE_POINTS = [
+      { x: -0.90, y: -0.72 },
+      { x: -0.72, y: -0.55 },
+      { x: -0.40, y: -0.18 },
+      { x: -0.08, y: -0.03 },
+      { x:  0.28, y:  0.25 },
+      { x:  0.58, y:  0.48 },
+      { x:  0.82, y:  0.78 }
+    ];
+
+    let points = [
+      { x: -0.85, y: -0.55 },
+      { x: -0.55, y: -0.35 },
+      { x: -0.15, y: -0.05 },
+      { x:  0.20, y:  0.28 },
+      { x:  0.60, y:  0.55 },
+      { x:  0.90, y:  0.78 }
+    ];
+
+    let params = { ...DEFAULT_PARAMS };
+    let optimum = { w: 0, b: 0 };
+    let gdPath = [];
+    let traceActive = false;
+    let running = false;
+    let dataDragPoint = null;
+    let contourDragging = false;
+    let hoverDataPoint = null;
+
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+    function toPixelData(x, y) {
+      const px = (x - DATA_RANGE.xMin) / (DATA_RANGE.xMax - DATA_RANGE.xMin) * dataCanvas.width;
+      const py = dataCanvas.height - (y - DATA_RANGE.yMin) / (DATA_RANGE.yMax - DATA_RANGE.yMin) * dataCanvas.height;
+      return [px, py];
+    }
+    function toDataCoords(px, py) {
+      const x = DATA_RANGE.xMin + (px / dataCanvas.width) * (DATA_RANGE.xMax - DATA_RANGE.xMin);
+      const y = DATA_RANGE.yMin + ((dataCanvas.height - py) / dataCanvas.height) * (DATA_RANGE.yMax - DATA_RANGE.yMin);
+      return [clamp(x, DATA_RANGE.xMin, DATA_RANGE.xMax), clamp(y, DATA_RANGE.yMin, DATA_RANGE.yMax)];
+    }
+
+    function getCanvasCoords(evt, canvas) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      return {
+        x: (evt.clientX - rect.left) * scaleX,
+        y: (evt.clientY - rect.top) * scaleY
+      };
+    }
+
+    function getParamPlotBox(canvas) {
+      const wSpan = PARAM_RANGE.wMax - PARAM_RANGE.wMin;
+      const bSpan = PARAM_RANGE.bMax - PARAM_RANGE.bMin;
+      const padX = 14;
+      const padY = 14;
+      const usableW = canvas.width - 2 * padX;
+      const usableH = canvas.height - 2 * padY;
+      const scale = Math.min(usableW / wSpan, usableH / bSpan);
+      const plotW = scale * wSpan;
+      const plotH = scale * bSpan;
+      const left = Math.round((canvas.width - plotW) / 2);
+      const top = Math.round((canvas.height - plotH) / 2);
+      return { left, top, plotW, plotH, scale, padX, padY };
+    }
+
+    function toPixelParam(w, b, canvas) {
+      const box = getParamPlotBox(canvas);
+      const px = box.left + (w - PARAM_RANGE.wMin) * box.scale;
+      const py = box.top + (PARAM_RANGE.bMax - b) * box.scale;
+      return [px, py];
+    }
+    function toParamCoords(px, py, canvas) {
+      const box = getParamPlotBox(canvas);
+      const w = PARAM_RANGE.wMin + (px - box.left) / box.scale;
+      const b = PARAM_RANGE.bMax - (py - box.top) / box.scale;
+      return {
+        w: clamp(w, PARAM_RANGE.wMin, PARAM_RANGE.wMax),
+        b: clamp(b, PARAM_RANGE.bMin, PARAM_RANGE.bMax)
+      };
+    }
+
+    function currentLR() { return parseFloat(lrSlider.value); }
+    function currentStepMode() { return stepMode.value; }
+    function currentBTInit() { return parseFloat(btInitSlider.value); }
+    function currentBTBeta() { return parseFloat(btBetaSlider.value); }
+    function currentBTC() { return parseFloat(btCSlider.value); }
+
+    function chooseStepSize(w, b, grad) {
+      if (currentStepMode() === 'fixed') {
+        return currentLR();
+      }
+      const g2 = grad.dw * grad.dw + grad.db * grad.db;
+      if (g2 < 1e-14) return 0;
+      const beta = currentBTBeta();
+      const c = currentBTC();
+      let alpha = currentBTInit();
+      const L0 = mse(w, b);
+      for (let k = 0; k < 30; k++) {
+        const wn = clamp(w - alpha * grad.dw, PARAM_RANGE.wMin, PARAM_RANGE.wMax);
+        const bn = clamp(b - alpha * grad.db, PARAM_RANGE.bMin, PARAM_RANGE.bMax);
+        const L1 = mse(wn, bn);
+        if (L1 <= L0 - c * alpha * g2) return alpha;
+        alpha *= beta;
+      }
+      return alpha;
+    }
+
+    function mse(w, b) {
+      if (points.length === 0) return 0;
+      let sum = 0;
+      for (const p of points) {
+        const r = w * p.x + b - p.y;
+        sum += r * r;
+      }
+      return 0.5 * sum;
+    }
+
+    function gradient(w, b) {
+      if (points.length === 0) return { dw: 0, db: 0 };
+      let dw = 0;
+      let db = 0;
+      for (const p of points) {
+        const r = w * p.x + b - p.y;
+        dw += r * p.x;
+        db += r;
+      }
+      
+      return { dw, db };
+    }
+
+    function linearRegression(data) {
+      const n = data.length;
+      if (n === 0) return { w: 0, b: 0 };
+      if (n === 1) return { w: 0, b: data[0].y };
+
+      let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+      for (const p of data) {
+        sumX += p.x;
+        sumY += p.y;
+        sumXY += p.x * p.y;
+        sumX2 += p.x * p.x;
+      }
+      const meanX = sumX / n;
+      const meanY = sumY / n;
+      const denom = sumX2 - n * meanX * meanX;
+      if (Math.abs(denom) < 1e-10) return { w: 0, b: meanY };
+      const w = (sumXY - n * meanX * meanY) / denom;
+      const b = meanY - w * meanX;
+      return { w, b };
+    }
+
+    function clipLineToBox(w, b) {
+      const candidates = [];
+      const add = (x, y) => {
+        if (x >= DATA_RANGE.xMin - 1e-9 && x <= DATA_RANGE.xMax + 1e-9 && y >= DATA_RANGE.yMin - 1e-9 && y <= DATA_RANGE.yMax + 1e-9) {
+          candidates.push([x, y]);
+        }
+      };
+      add(DATA_RANGE.xMin, w * DATA_RANGE.xMin + b);
+      add(DATA_RANGE.xMax, w * DATA_RANGE.xMax + b);
+      if (Math.abs(w) > 1e-12) {
+        add((DATA_RANGE.yMin - b) / w, DATA_RANGE.yMin);
+        add((DATA_RANGE.yMax - b) / w, DATA_RANGE.yMax);
+      }
+      const uniq = [];
+      for (const c of candidates) {
+        if (!uniq.some(u => Math.hypot(u[0] - c[0], u[1] - c[1]) < 1e-6)) uniq.push(c);
+      }
+      if (uniq.length < 2) return null;
+      uniq.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      return [uniq[0], uniq[uniq.length - 1]];
+    }
+
+    function recomputeOptimum() {
+      optimum = linearRegression(points);
+    }
+
+    function resetPath() {
+      gdPath = [];
+      traceActive = false;
+    }
+
+    function startTrace() {
+      gdPath = [{ w: params.w, b: params.b, loss: mse(params.w, params.b) }];
+      traceActive = true;
+    }
+
+    function addPathPoint() {
+      if (!traceActive) return;
+      const loss = mse(params.w, params.b);
+      const last = gdPath[gdPath.length - 1];
+      if (!last || Math.hypot(last.w - params.w, last.b - params.b) > 1e-6 || Math.abs(last.loss - loss) > 1e-8) {
+        gdPath.push({ w: params.w, b: params.b, loss });
+        if (gdPath.length > 400) gdPath.shift();
+      }
+    }
+
+    function gradientStep() {
+      if (points.length === 0) return;
+      if (!traceActive) startTrace();
+      const g = gradient(params.w, params.b);
+      const alpha = chooseStepSize(params.w, params.b, g);
+      params.w = clamp(params.w - alpha * g.dw, PARAM_RANGE.wMin, PARAM_RANGE.wMax);
+      params.b = clamp(params.b - alpha * g.db, PARAM_RANGE.bMin, PARAM_RANGE.bMax);
+      addPathPoint();
+      drawAll();
+    }
+
+    function startGD() {
+      if (running) return;
+      running = true;
+      loopGD();
+    }
+
+    function stopGD() {
+      running = false;
+    }
+
+    function loopGD() {
+      if (!running) return;
+      const g = gradient(params.w, params.b);
+      const gnorm = Math.hypot(g.dw, g.db);
+      if (gnorm < 1e-4 || points.length === 0) {
+        running = false;
+        drawAll();
+        return;
+      }
+      gradientStep();
+      requestAnimationFrame(loopGD);
+    }
+
+    function drawAxes(ctx, width, height, xZeroPx, yZeroPx, xLabel, yLabel) {
+      ctx.save();
+      ctx.strokeStyle = '#d4d4d8';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+      ctx.beginPath();
+      ctx.moveTo(0, yZeroPx); ctx.lineTo(width, yZeroPx);
+      ctx.moveTo(xZeroPx, 0); ctx.lineTo(xZeroPx, height);
+      ctx.stroke();
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '14px Arial';
+      ctx.fillText(xLabel, width - 18, yZeroPx - 8);
+      ctx.fillText(yLabel, xZeroPx + 8, 16);
+      ctx.restore();
+    }
+
+    function drawDataView() {
+      dataCtx.clearRect(0, 0, dataCanvas.width, dataCanvas.height);
+      const [x0, y0] = toPixelData(0, 0);
+      drawAxes(dataCtx, dataCanvas.width, dataCanvas.height, x0, y0, 'x', 'y');
+
+      const seg = clipLineToBox(params.w, params.b);
+      if (seg) {
+        const [p1, p2] = seg;
+        const [x1, y1] = toPixelData(p1[0], p1[1]);
+        const [x2, y2] = toPixelData(p2[0], p2[1]);
+        dataCtx.save();
+        dataCtx.strokeStyle = '#dc2626';
+        dataCtx.lineWidth = 3;
+        dataCtx.beginPath();
+        dataCtx.moveTo(x1, y1);
+        dataCtx.lineTo(x2, y2);
+        dataCtx.stroke();
+        dataCtx.restore();
+      }
+
+      if (showResiduals.checked) {
+        dataCtx.save();
+        dataCtx.strokeStyle = '#2563eb';
+        dataCtx.setLineDash([6, 6]);
+        dataCtx.lineWidth = 1.8;
+        for (const p of points) {
+          const yhat = params.w * p.x + params.b;
+          const [x1, y1] = toPixelData(p.x, p.y);
+          const [x2, y2] = toPixelData(p.x, clamp(yhat, DATA_RANGE.yMin, DATA_RANGE.yMax));
+          dataCtx.beginPath();
+          dataCtx.moveTo(x1, y1);
+          dataCtx.lineTo(x2, y2);
+          dataCtx.stroke();
+        }
+        dataCtx.restore();
+      }
+
+      for (const p of points) {
+        const [px, py] = toPixelData(p.x, p.y);
+        dataCtx.beginPath();
+        dataCtx.arc(px, py, radiusPx, 0, Math.PI * 2);
+        dataCtx.fillStyle = p === hoverDataPoint || p === dataDragPoint ? '#f59e0b' : '#111827';
+        dataCtx.fill();
+      }
+    }
+
+    function computeLossGrid(nx = 110, ny = 110) {
+      let minL = Infinity;
+      let maxL = -Infinity;
+      const grid = Array.from({ length: ny }, () => new Array(nx));
+      for (let iy = 0; iy < ny; iy++) {
+        const b = PARAM_RANGE.bMax - iy / (ny - 1) * (PARAM_RANGE.bMax - PARAM_RANGE.bMin);
+        for (let ix = 0; ix < nx; ix++) {
+          const w = PARAM_RANGE.wMin + ix / (nx - 1) * (PARAM_RANGE.wMax - PARAM_RANGE.wMin);
+          const L = mse(w, b);
+          grid[iy][ix] = L;
+          if (L < minL) minL = L;
+          if (L > maxL) maxL = L;
+        }
+      }
+      return { grid, minL, maxL, nx, ny };
+    }
+
+    function colorMap(t) {
+      const c1 = [239, 246, 255];
+      const c2 = [96, 165, 250];
+      const c3 = [251, 191, 36];
+      const c4 = [220, 38, 38];
+      function lerp(a, b, s) { return Math.round(a + (b - a) * s); }
+      let A, B, s;
+      if (t < 0.33) {
+        A = c1; B = c2; s = t / 0.33;
+      } else if (t < 0.66) {
+        A = c2; B = c3; s = (t - 0.33) / 0.33;
+      } else {
+        A = c3; B = c4; s = (t - 0.66) / 0.34;
+      }
+      return `rgb(${lerp(A[0], B[0], s)}, ${lerp(A[1], B[1], s)}, ${lerp(A[2], B[2], s)})`;
+    }
+
+    function drawContourView() {
+      contourCtx.clearRect(0, 0, contourCanvas.width, contourCanvas.height);
+      const box = getParamPlotBox(contourCanvas);
+      const { grid, minL, maxL, nx, ny } = computeLossGrid(100, 100);
+
+      contourCtx.save();
+      for (let iy = 0; iy < ny - 1; iy++) {
+        for (let ix = 0; ix < nx - 1; ix++) {
+          const L = grid[iy][ix];
+          const t = (L - minL) / Math.max(1e-12, maxL - minL);
+          contourCtx.fillStyle = colorMap(Math.pow(t, 0.55));
+          const w = PARAM_RANGE.wMin + ix / (nx - 1) * (PARAM_RANGE.wMax - PARAM_RANGE.wMin);
+          const b = PARAM_RANGE.bMax - iy / (ny - 1) * (PARAM_RANGE.bMax - PARAM_RANGE.bMin);
+          const [x, y] = toPixelParam(w, b, contourCanvas);
+          contourCtx.fillRect(x, y, box.plotW / (nx - 1) + 1, box.plotH / (ny - 1) + 1);
+        }
+      }
+      contourCtx.restore();
+
+      // Draw contour lines using marching squares
+      contourCtx.save();
+      contourCtx.strokeStyle = 'rgba(17,24,39,0.35)';
+      contourCtx.lineWidth = 1.2;
+      const levels = 12;
+
+      function interp(p1, p2, v1, v2, t) {
+        const a = (t - v1) / (v2 - v1 + 1e-12);
+        return [p1[0] + a * (p2[0] - p1[0]), p1[1] + a * (p2[1] - p1[1])];
+      }
+
+      for (let k = 1; k <= levels; k++) {
+        const t = minL + (k / (levels + 1)) * (maxL - minL);
+        contourCtx.beginPath();
+        for (let iy = 0; iy < ny - 1; iy++) {
+          for (let ix = 0; ix < nx - 1; ix++) {
+            const v00 = grid[iy][ix];
+            const v10 = grid[iy][ix + 1];
+            const v01 = grid[iy + 1][ix];
+            const v11 = grid[iy + 1][ix + 1];
+
+            const w0 = PARAM_RANGE.wMin + ix / (nx - 1) * (PARAM_RANGE.wMax - PARAM_RANGE.wMin);
+            const w1 = PARAM_RANGE.wMin + (ix + 1) / (nx - 1) * (PARAM_RANGE.wMax - PARAM_RANGE.wMin);
+            const b0 = PARAM_RANGE.bMax - iy / (ny - 1) * (PARAM_RANGE.bMax - PARAM_RANGE.bMin);
+            const b1 = PARAM_RANGE.bMax - (iy + 1) / (ny - 1) * (PARAM_RANGE.bMax - PARAM_RANGE.bMin);
+
+            const p00 = toPixelParam(w0, b0, contourCanvas);
+            const p10 = toPixelParam(w1, b0, contourCanvas);
+            const p01 = toPixelParam(w0, b1, contourCanvas);
+            const p11 = toPixelParam(w1, b1, contourCanvas);
+
+            let idx = 0;
+            if (v00 > t) idx |= 1;
+            if (v10 > t) idx |= 2;
+            if (v11 > t) idx |= 4;
+            if (v01 > t) idx |= 8;
+
+            const segs = [];
+            switch (idx) {
+              case 0:
+              case 15:
+                break;
+              case 1:
+              case 14:
+                segs.push([interp(p00, p10, v00, v10, t), interp(p00, p01, v00, v01, t)]);
+                break;
+              case 2:
+              case 13:
+                segs.push([interp(p10, p00, v10, v00, t), interp(p10, p11, v10, v11, t)]);
+                break;
+              case 3:
+              case 12:
+                segs.push([interp(p00, p01, v00, v01, t), interp(p10, p11, v10, v11, t)]);
+                break;
+              case 4:
+              case 11:
+                segs.push([interp(p11, p10, v11, v10, t), interp(p11, p01, v11, v01, t)]);
+                break;
+              case 5:
+                segs.push([interp(p00, p10, v00, v10, t), interp(p10, p11, v10, v11, t)]);
+                segs.push([interp(p00, p01, v00, v01, t), interp(p11, p01, v11, v01, t)]);
+                break;
+              case 6:
+              case 9:
+                segs.push([interp(p10, p00, v10, v00, t), interp(p11, p01, v11, v01, t)]);
+                break;
+              case 7:
+              case 8:
+                segs.push([interp(p00, p01, v00, v01, t), interp(p11, p01, v11, v01, t)]);
+                break;
+              case 10:
+                segs.push([interp(p00, p10, v00, v10, t), interp(p00, p01, v00, v01, t)]);
+                segs.push([interp(p10, p11, v10, v11, t), interp(p11, p01, v11, v01, t)]);
+                break;
+            }
+
+            for (const s of segs) {
+              contourCtx.moveTo(s[0][0], s[0][1]);
+              contourCtx.lineTo(s[1][0], s[1][1]);
+            }
+          }
+        }
+        contourCtx.stroke();
+      }
+      contourCtx.restore();
+
+      contourCtx.save();
+      contourCtx.strokeStyle = '#d4d4d8';
+      contourCtx.lineWidth = 1;
+      contourCtx.strokeRect(box.left + 0.5, box.top + 0.5, box.plotW - 1, box.plotH - 1);
+      const [x0, y0] = toPixelParam(0, 0, contourCanvas);
+      contourCtx.beginPath();
+      contourCtx.moveTo(box.left, y0); contourCtx.lineTo(box.left + box.plotW, y0);
+      contourCtx.moveTo(x0, box.top); contourCtx.lineTo(x0, box.top + box.plotH);
+      contourCtx.stroke();
+      contourCtx.fillStyle = '#6b7280';
+      contourCtx.font = '14px Arial';
+      contourCtx.fillText('w', box.left + box.plotW - 14, y0 - 8);
+      contourCtx.fillText('b', x0 + 8, box.top + 16);
+      contourCtx.restore();
+
+      const [optX, optY] = toPixelParam(optimum.w, optimum.b, contourCanvas);
+      contourCtx.save();
+      contourCtx.strokeStyle = '#059669';
+      contourCtx.lineWidth = 2.5;
+      contourCtx.beginPath();
+      contourCtx.moveTo(optX - 7, optY); contourCtx.lineTo(optX + 7, optY);
+      contourCtx.moveTo(optX, optY - 7); contourCtx.lineTo(optX, optY + 7);
+      contourCtx.stroke();
+      contourCtx.restore();
+
+      if (showPath.checked && traceActive && gdPath.length > 1) {
+        contourCtx.save();
+        contourCtx.strokeStyle = 'rgba(37,99,235,0.95)';
+        contourCtx.lineWidth = 2;
+        contourCtx.beginPath();
+        gdPath.forEach((p, i) => {
+          const [px, py] = toPixelParam(p.w, p.b, contourCanvas);
+          if (i === 0) contourCtx.moveTo(px, py); else contourCtx.lineTo(px, py);
+        });
+        contourCtx.stroke();
+        contourCtx.restore();
+      }
+
+      const [px, py] = toPixelParam(params.w, params.b, contourCanvas);
+      contourCtx.save();
+      contourCtx.beginPath();
+      contourCtx.arc(px, py, 8, 0, Math.PI * 2);
+      contourCtx.fillStyle = '#2563eb';
+      contourCtx.fill();
+      contourCtx.strokeStyle = '#ffffff';
+      contourCtx.lineWidth = 2;
+      contourCtx.stroke();
+      contourCtx.restore();
+    }
+
+    
+
+    function project3D(w, b, z, zMin, zMax) {
+      const xn = (w - PARAM_RANGE.wMin) / (PARAM_RANGE.wMax - PARAM_RANGE.wMin) - 0.5;
+      const yn = (b - PARAM_RANGE.bMin) / (PARAM_RANGE.bMax - PARAM_RANGE.bMin) - 0.5;
+      const zn = (z - zMin) / Math.max(1e-10, zMax - zMin);
+      const scale = 215;
+      const originX = surfaceCanvas.width * 0.5;
+      const originY = surfaceCanvas.height * 0.74;
+      const x = originX + scale * (xn - 0.72 * yn);
+      const y = originY - scale * (0.45 * xn + 0.36 * yn + 0.95 * zn);
+      return [x, y];
+    }
+
+    function drawSurfaceView() {
+      surfaceCtx.clearRect(0, 0, surfaceCanvas.width, surfaceCanvas.height);
+      const nW = 22;
+      const nB = 22;
+      const Z = [];
+      let zMin = Infinity, zMax = -Infinity;
+      for (let ib = 0; ib < nB; ib++) {
+        const b = PARAM_RANGE.bMin + ib / (nB - 1) * (PARAM_RANGE.bMax - PARAM_RANGE.bMin);
+        const row = [];
+        for (let iw = 0; iw < nW; iw++) {
+          const w = PARAM_RANGE.wMin + iw / (nW - 1) * (PARAM_RANGE.wMax - PARAM_RANGE.wMin);
+          const z = mse(w, b);
+          row.push(z);
+          zMin = Math.min(zMin, z);
+          zMax = Math.max(zMax, z);
+        }
+        Z.push(row);
+      }
+
+      surfaceCtx.save();
+      for (let ib = 0; ib < nB; ib++) {
+        surfaceCtx.beginPath();
+        for (let iw = 0; iw < nW; iw++) {
+          const w = PARAM_RANGE.wMin + iw / (nW - 1) * (PARAM_RANGE.wMax - PARAM_RANGE.wMin);
+          const b = PARAM_RANGE.bMin + ib / (nB - 1) * (PARAM_RANGE.bMax - PARAM_RANGE.bMin);
+          const [x, y] = project3D(w, b, Z[ib][iw], zMin, zMax);
+          if (iw === 0) surfaceCtx.moveTo(x, y); else surfaceCtx.lineTo(x, y);
+        }
+        surfaceCtx.strokeStyle = 'rgba(37,99,235,0.55)';
+        surfaceCtx.lineWidth = 1;
+        surfaceCtx.stroke();
+      }
+      for (let iw = 0; iw < nW; iw++) {
+        surfaceCtx.beginPath();
+        for (let ib = 0; ib < nB; ib++) {
+          const w = PARAM_RANGE.wMin + iw / (nW - 1) * (PARAM_RANGE.wMax - PARAM_RANGE.wMin);
+          const b = PARAM_RANGE.bMin + ib / (nB - 1) * (PARAM_RANGE.bMax - PARAM_RANGE.bMin);
+          const [x, y] = project3D(w, b, Z[ib][iw], zMin, zMax);
+          if (ib === 0) surfaceCtx.moveTo(x, y); else surfaceCtx.lineTo(x, y);
+        }
+        surfaceCtx.strokeStyle = 'rgba(220,38,38,0.45)';
+        surfaceCtx.lineWidth = 1;
+        surfaceCtx.stroke();
+      }
+      surfaceCtx.restore();
+
+      const [xw0, yw0] = project3D(PARAM_RANGE.wMin, PARAM_RANGE.bMin, zMin, zMin, zMax);
+      const [xw1, yw1] = project3D(PARAM_RANGE.wMax, PARAM_RANGE.bMin, zMin, zMin, zMax);
+      const [xb1, yb1] = project3D(PARAM_RANGE.wMin, PARAM_RANGE.bMax, zMin, zMin, zMax);
+      const [xz1, yz1] = project3D(PARAM_RANGE.wMin, PARAM_RANGE.bMin, zMax, zMin, zMax);
+      surfaceCtx.save();
+      surfaceCtx.strokeStyle = '#374151';
+      surfaceCtx.lineWidth = 1.5;
+      surfaceCtx.beginPath();
+      surfaceCtx.moveTo(xw0, yw0); surfaceCtx.lineTo(xw1, yw1);
+      surfaceCtx.moveTo(xw0, yw0); surfaceCtx.lineTo(xb1, yb1);
+      surfaceCtx.moveTo(xw0, yw0); surfaceCtx.lineTo(xz1, yz1);
+      surfaceCtx.stroke();
+      surfaceCtx.fillStyle = '#6b7280';
+      surfaceCtx.font = '14px Arial';
+      surfaceCtx.fillText('w', xw1 + 6, yw1 + 2);
+      surfaceCtx.fillText('b', xb1 - 8, yb1 - 6);
+      surfaceCtx.fillText('L', xz1 - 12, yz1 - 6);
+      surfaceCtx.restore();
+
+      const curLoss = mse(params.w, params.b);
+      const [px, py] = project3D(params.w, params.b, curLoss, zMin, zMax);
+      surfaceCtx.save();
+      surfaceCtx.beginPath();
+      surfaceCtx.arc(px, py, 7, 0, Math.PI * 2);
+      surfaceCtx.fillStyle = '#dc2626';
+      surfaceCtx.fill();
+      surfaceCtx.strokeStyle = '#ffffff';
+      surfaceCtx.lineWidth = 2;
+      surfaceCtx.stroke();
+      surfaceCtx.restore();
+
+      const [optx, opty] = project3D(optimum.w, optimum.b, mse(optimum.w, optimum.b), zMin, zMax);
+      surfaceCtx.save();
+      surfaceCtx.strokeStyle = '#059669';
+      surfaceCtx.lineWidth = 2;
+      surfaceCtx.beginPath();
+      surfaceCtx.moveTo(optx - 6, opty); surfaceCtx.lineTo(optx + 6, opty);
+      surfaceCtx.moveTo(optx, opty - 6); surfaceCtx.lineTo(optx, opty + 6);
+      surfaceCtx.stroke();
+      surfaceCtx.restore();
+    }
+
+    function updateControlState() {
+      const useFixed = currentStepMode() === 'fixed';
+      lrBox.classList.toggle('inactive-box', !useFixed);
+      btBox.classList.toggle('inactive-box', useFixed);
+      lrSlider.disabled = !useFixed;
+      btInitSlider.disabled = useFixed;
+      btBetaSlider.disabled = useFixed;
+      btCSlider.disabled = useFixed;
+    }
+
+    function updateStatus() {
+      const L = mse(params.w, params.b);
+      const g = gradient(params.w, params.b);
+      const gnorm = Math.hypot(g.dw, g.db);
+      const optLoss = mse(optimum.w, optimum.b);
+      status.innerHTML = `
+        <div><span class="value">w</span> = ${params.w.toFixed(3)}</div>
+        <div><span class="value">b</span> = ${params.b.toFixed(3)}</div>
+        <div><span class="value">Loss</span> = ${L.toFixed(4)}</div>
+        <div><span class="value">‖∇L‖</span> = ${gnorm.toFixed(4)}</div>
+        <div><span class="value">Step rule</span> = ${currentStepMode() === 'fixed' ? 'fixed' : 'backtracking'}</div>
+        <div><span class="value">Optimum</span> = (${optimum.w.toFixed(3)}, ${optimum.b.toFixed(3)})</div>
+        <div><span class="value">Optimal loss</span> = ${optLoss.toFixed(4)}</div>
+      `;
+      lrValue.textContent = currentLR().toFixed(3);
+      btInitValue.textContent = currentBTInit().toFixed(2);
+      btBetaValue.textContent = currentBTBeta().toFixed(2);
+      btCValue.textContent = currentBTC().toFixed(4);
+    }
+
+    function drawAll() {
+      recomputeOptimum();
+      drawDataView();
+      drawContourView();
+      drawSurfaceView();
+      updateControlState();
+      updateStatus();
+    }
+
+    function getDataPointAt(px, py) {
+      for (const p of points) {
+        const [cx, cy] = toPixelData(p.x, p.y);
+        if ((cx - px) ** 2 + (cy - py) ** 2 <= radiusPx ** 2) return p;
+      }
+      return null;
+    }
+
+    dataCanvas.addEventListener('mousedown', (e) => {
+      stopGD();
+      const { x: px, y: py } = getCanvasCoords(e, dataCanvas);
+      const hit = getDataPointAt(px, py);
+      if (hit) {
+        dataDragPoint = hit;
+      } else {
+        const [x, y] = toDataCoords(px, py);
+        points.push({ x, y });
+        recomputeOptimum();
+        resetPath();
+        drawAll();
+      }
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      const dataPos = getCanvasCoords(e, dataCanvas);
+      const px = dataPos.x;
+      const py = dataPos.y;
+      if (dataDragPoint) {
+        const [x, y] = toDataCoords(px, py);
+        dataDragPoint.x = x;
+        dataDragPoint.y = y;
+        recomputeOptimum();
+        drawAll();
+      } else {
+        hoverDataPoint = (px >= 0 && px <= dataCanvas.width && py >= 0 && py <= dataCanvas.height) ? getDataPointAt(px, py) : null;
+        dataCanvas.style.cursor = hoverDataPoint ? 'grab' : 'crosshair';
+        if (!contourDragging) drawDataView();
+      }
+
+      const contourPos = getCanvasCoords(e, contourCanvas);
+      const qx = contourPos.x;
+      const qy = contourPos.y;
+      if (contourDragging) {
+        params = toParamCoords(qx, qy, contourCanvas);
+        resetPath();
+        drawAll();
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      dataDragPoint = null;
+      contourDragging = false;
+    });
+
+    contourCanvas.addEventListener('mousedown', (e) => {
+      stopGD();
+      const { x: px, y: py } = getCanvasCoords(e, contourCanvas);
+      const [cx, cy] = toPixelParam(params.w, params.b, contourCanvas);
+      if ((cx - px) ** 2 + (cy - py) ** 2 <= 14 ** 2) {
+        contourDragging = true;
+        params = toParamCoords(px, py, contourCanvas);
+        resetPath();
+        drawAll();
+      } else {
+        params = toParamCoords(px, py, contourCanvas);
+        resetPath();
+        drawAll();
+      }
+    });
+
+    addSampleBtn.addEventListener('click', () => {
+      stopGD();
+      points = SAMPLE_POINTS.map(p => ({ ...p }));
+      params = { ...DEFAULT_PARAMS };
+      resetPath();
+      drawAll();
+    });
+
+    clearBtn.addEventListener('click', () => {
+      stopGD();
+      points = [];
+      params = { w: 0, b: 0 };
+      resetPath();
+      drawAll();
+    });
+
+    fitBtn.addEventListener('click', () => {
+      stopGD();
+      params = { w: optimum.w, b: optimum.b };
+      resetPath();
+      drawAll();
+    });
+
+    stepBtn.addEventListener('click', () => {
+      stopGD();
+      gradientStep();
+    });
+    runBtn.addEventListener('click', startGD);
+    stopBtn.addEventListener('click', stopGD);
+    lrSlider.addEventListener('input', updateStatus);
+    stepMode.addEventListener('change', drawAll);
+    btInitSlider.addEventListener('input', updateStatus);
+    btBetaSlider.addEventListener('input', updateStatus);
+    btCSlider.addEventListener('input', updateStatus);
+    showResiduals.addEventListener('change', drawAll);
+    showPath.addEventListener('change', drawAll);
+
+    recomputeOptimum();
+    resetPath();
+    updateControlState();
+    drawAll();
+  </script>
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['\\(','\\)'], ['$', '$']]
+      }
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</body>
+</html>
